@@ -103,7 +103,7 @@ class VersionChecker:
             self.last_checked_version_info = version_info  # 存储完整的版本信息
 
             # 比较版本号
-            current_version = self.plugin.config.get("version", "v2.8.9")
+            current_version = self.plugin.plugin_version
             if self._compare_versions(version_info["version"], current_version) > 0:
                 # 检测到新版本
                 self.logger.log_info(
@@ -214,7 +214,7 @@ class VersionChecker:
                 current_version=current_version,
                 new_version=version_info.get("version", "未知"),
                 update_content=version_info.get("content", "暂无更新说明"),
-                download_url="https://github.com/left666/astrbot_plugin_daily_limit",
+                download_url="https://github.com/GoFelicity/astrbot_plugin_dailylimit-plus.git",
             )
 
             # 发送给每个管理员

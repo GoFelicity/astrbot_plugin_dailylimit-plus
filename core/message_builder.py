@@ -158,12 +158,7 @@ class MessageBuilder:
 
     def get_current_time_period_info(self, current_time_str):
         """获取当前时间段信息"""
-        for period in self.plugin.time_period_limits:
-            if self.plugin.limiter.is_in_time_period(
-                current_time_str, period["start_time"], period["end_time"]
-            ):
-                return period
-        return None
+        return self.plugin.time_period_mgr.get_current_time_period(current_time_str)
 
     def build_exempt_user_status(
         self, user_id, group_id, time_period_limit, current_time_str
@@ -177,20 +172,71 @@ class MessageBuilder:
             group_context=group_context,
         )
 
+        # Plus 版: 豁免用户也展示 token 消耗
+        status_msg += self._build_token_line(user_id, with_month=True)
+
         # 添加时间段限制信息（即使豁免用户也显示）
-        if time_period_limit is not None:
-            current_period_info = self.get_current_time_period_info(current_time_str)
-            if current_period_info:
-                time_period_msg = self.get_custom_message(
-                    "limit_status_time_period_message",
-                    "\n\n⏰ 当前处于时间段限制：{start_time}-{end_time}\n📋 时间段限制：{time_period_limit} 次",
-                    start_time=current_period_info["start_time"],
-                    end_time=current_period_info["end_time"],
-                    time_period_limit=time_period_limit,
-                )
-                status_msg += time_period_msg
+        current_period_info = self.get_current_time_period_info(current_time_str)
+        if current_period_info:
+            time_period_msg = self.get_custom_message(
+                "limit_status_time_period_message",
+                "\n\n⏰ 当前处于时间段限制：{start_time}-{end_time}\n📋 时间段限制：{time_period_limit} 次",
+                start_time=current_period_info["start_time"],
+                end_time=current_period_info["end_time"],
+                time_period_limit=current_period_info["limit"],
+            )
+            status_msg += time_period_msg
 
         return status_msg
+
+    def _format_tokens(self, n: int) -> str:
+        """千分位格式化 token 数 (1234 -> '1,234')"""
+        try:
+            return f"{int(n):,}"
+        except (TypeError, ValueError):
+            return "0"
+
+    def _build_token_line(self, user_id, with_month: bool = True) -> str:
+        """
+        Plus 版: 构建 token 展示行(单用户维度)
+        优先读 token_tracker,失败时静默返回空串(不影响主流程)
+        """
+        if not user_id:
+            return ""
+        # 开关: 管理员可关掉 token 展示
+        try:
+            show = self.plugin.config.get("limits", {}).get(
+                "show_token_usage", True
+            )
+        except Exception:
+            show = True
+        if not show:
+            return ""
+
+        tracker = getattr(self.plugin, "token_tracker", None)
+        if tracker is None:
+            return ""
+
+        try:
+            today = tracker.get_today(str(user_id))
+            if today.get("calls", 0) == 0:
+                return "\n🔥 今日 token: 0"
+            today_line = (
+                f"\n🔥 今日 token: {self._format_tokens(today['total'])} "
+                f"(输入 {self._format_tokens(today['input'])} + "
+                f"输出 {self._format_tokens(today['output'])}, "
+                f"{today['calls']} 次调用)"
+            )
+            if not with_month:
+                return today_line
+            month = tracker.get_month(str(user_id))
+            month_line = (
+                f"\n📈 本月累计: {self._format_tokens(month['total'])} "
+                f"({month['calls']} 次)"
+            )
+            return today_line + month_line
+        except Exception:
+            return ""
 
     def build_shared_group_status(self, user_id, group_id, limit, reset_time):
         """构建群组共享模式状态消息"""
@@ -218,6 +264,8 @@ class MessageBuilder:
             base_template += "\n📈 {progress_bar}"
         if show_remaining:
             base_template += "\n🎯 剩余次数：{remaining} 次"
+        # Plus 版: 群共享模式也展示本群总 token(汇总群内所有用户)
+        base_template += "{token_line}"
         base_template += "\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}"
 
         return self.get_custom_message(
@@ -228,6 +276,7 @@ class MessageBuilder:
             limit=limit,
             progress_bar=progress_bar,
             remaining=remaining,
+            token_line=self._build_token_line(user_id, with_month=False),
             usage_tip=usage_tip,
             reset_time=reset_time,
         )
@@ -258,6 +307,8 @@ class MessageBuilder:
             base_template += "\n📈 {progress_bar}"
         if show_remaining:
             base_template += "\n🎯 剩余次数：{remaining} 次"
+        # Plus 版: 个人 token 今日+本月
+        base_template += "{token_line}"
         base_template += "\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}"
 
         return self.get_custom_message(
@@ -268,6 +319,7 @@ class MessageBuilder:
             limit=limit,
             progress_bar=progress_bar,
             remaining=remaining,
+            token_line=self._build_token_line(user_id, with_month=True),
             usage_tip=usage_tip,
             reset_time=reset_time,
         )
@@ -295,6 +347,8 @@ class MessageBuilder:
             base_template += "\n📈 {progress_bar}"
         if show_remaining:
             base_template += "\n🎯 剩余次数：{remaining} 次"
+        # Plus 版: 私聊模式展示 token 今日+本月
+        base_template += "{token_line}"
         base_template += "\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}"
 
         return self.get_custom_message(
@@ -304,6 +358,7 @@ class MessageBuilder:
             limit=limit,
             progress_bar=progress_bar,
             remaining=remaining,
+            token_line=self._build_token_line(user_id, with_month=True),
             usage_tip=usage_tip,
             reset_time=reset_time,
         )
@@ -312,25 +367,25 @@ class MessageBuilder:
         self, status_msg, user_id, group_id, time_period_limit, current_time_str
     ):
         """添加时间段限制信息到状态消息"""
-        if time_period_limit is not None:
-            current_period_info = self.get_current_time_period_info(current_time_str)
-            if current_period_info:
-                time_period_usage = self.plugin._get_time_period_usage(user_id, group_id)
-                time_period_remaining = time_period_limit - time_period_usage
-                time_period_progress = self.generate_progress_bar(
-                    time_period_usage, time_period_limit
-                )
+        current_period_info = self.get_current_time_period_info(current_time_str)
+        if current_period_info:
+            time_period_limit = current_period_info["limit"]
+            time_period_usage = self.plugin._get_time_period_usage(user_id, group_id)
+            time_period_remaining = time_period_limit - time_period_usage
+            time_period_progress = self.generate_progress_bar(
+                time_period_usage, time_period_limit
+            )
 
-                time_period_msg = self.get_custom_message(
-                    "limit_status_time_period_message",
-                    "\n\n⏰ 当前处于时间段限制：{start_time}-{end_time}\n📋 时间段限制：{time_period_limit} 次\n📊 时间段内已使用：{time_period_usage}/{time_period_limit} 次\n📈 {time_period_progress}\n🎯 时间段内剩余：{time_period_remaining} 次",
-                    start_time=current_period_info["start_time"],
-                    end_time=current_period_info["end_time"],
-                    time_period_limit=time_period_limit,
-                    time_period_usage=time_period_usage,
-                    time_period_progress=time_period_progress,
-                    time_period_remaining=time_period_remaining,
-                )
-                status_msg += time_period_msg
+            time_period_msg = self.get_custom_message(
+                "limit_status_time_period_message",
+                "\n\n⏰ 当前处于时间段限制：{start_time}-{end_time}\n📋 时间段限制：{time_period_limit} 次\n📊 时间段内已使用：{time_period_usage}/{time_period_limit} 次\n📈 {time_period_progress}\n🎯 时间段内剩余：{time_period_remaining} 次",
+                start_time=current_period_info["start_time"],
+                end_time=current_period_info["end_time"],
+                time_period_limit=time_period_limit,
+                time_period_usage=time_period_usage,
+                time_period_progress=time_period_progress,
+                time_period_remaining=time_period_remaining,
+            )
+            status_msg += time_period_msg
 
         return status_msg

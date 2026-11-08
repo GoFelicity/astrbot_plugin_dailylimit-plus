@@ -5,6 +5,8 @@
 - 使用记录存储
 - 使用统计更新
 - 趋势数据分析
+
+Plus 版: 无 Redis 时静默降级(不记录),不影响主流程
 """
 
 import datetime
@@ -24,6 +26,15 @@ class UsageTracker:
         self.plugin = plugin
         self.logger = plugin.logger
         self.redis_client = plugin.redis_client
+
+    def _redis_or_none(self):
+        """Plus 版: 仅当 Redis 启用且连接成功时返回 client"""
+        client = getattr(self, "redis_client", None)
+        if client is None:
+            return None
+        if hasattr(client, "is_available") and not client.is_available():
+            return None
+        return getattr(client, "redis", None)
 
     def record_usage(self, user_id, group_id=None, usage_type="llm_request"):
         """
@@ -267,15 +278,9 @@ class UsageTracker:
         if not redis_client or not redis_client.redis:
             return {}
 
-        try:
-            data = redis_client.redis.hgetall(trend_key)
-            if data:
-                # 将字符串值转换为整数
-                return {k: int(v) for k, v in data.items()}
-            return {}
-        except Exception as e:
-            self.logger.log_error("获取趋势统计失败: {}", str(e))
-            return {}
+        # Reuse the identity-aware parser rather than returning raw hash fields
+        # as metrics (or trying to turn floating-point metadata into integers).
+        return self.plugin._get_trend_stats_by_key(trend_key) or {}
 
     # 以下方法需要从 main.py 中调用，提供占位符实现
     def _get_usage_record_key(self, user_id, group_id=None, date_str=None):
@@ -310,8 +315,7 @@ class UsageTracker:
 
     def _get_reset_period_date(self):
         """获取重置周期的日期字符串"""
-        # 这个方法需要在 main.py 中实现
-        return datetime.datetime.now().strftime("%Y-%m-%d")
+        return self.plugin.redis_keys.get_reset_period_date()
 
     def _get_reset_time(self):
         """获取重置时间"""
@@ -321,10 +325,8 @@ class UsageTracker:
         return datetime.time(hour=hour, minute=minute)
 
     def _get_seconds_until_tomorrow(self):
-        """获取距离明天的秒数"""
-        now = datetime.datetime.now()
-        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
-        return int((tomorrow - now).total_seconds())
+        """获取到配置的下一次重置时间的秒数"""
+        return self.plugin.redis_keys.get_seconds_until_reset()
 
     def _set_expiry_for_stats_keys(self, keys_to_update):
         """设置统计键的过期时间"""

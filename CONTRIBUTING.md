@@ -1,6 +1,6 @@
 ## 提交错误报告
 
-如果您发现了一个不存在安全问题的漏洞, 请在left666/astrbot_plugin_daily_limit仓库中的 Issues 中搜索, 以防该漏洞已被提交, 如果找不到漏洞可以创建一个新的 Issues. 如果发现了一个安全问题请不要将其公开. 请参阅安全问题处理方式. 提交错误报告时应该详尽
+如果您发现了一个不存在安全问题的漏洞, 请在 [GoFelicity/astrbot_plugin_dailylimit-plus](https://github.com/GoFelicity/astrbot_plugin_dailylimit-plus) 仓库的 Issues 中搜索, 以防该漏洞已被提交, 如果找不到漏洞可以创建一个新的 Issue. 如果发现了一个安全问题请不要将其公开. 请参阅安全问题处理方式. 提交错误报告时应该详尽
 
 ## 安全问题处理
 
@@ -28,5 +28,5 @@
 
 在什么情况下可以合并到 master/main.
 
-1. 维护者通过. 
+1. 维护者通过.
 2. 最新版本
