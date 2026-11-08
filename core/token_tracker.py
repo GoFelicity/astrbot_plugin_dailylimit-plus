@@ -158,8 +158,10 @@ class TokenTracker:
         self._flush()
 
     def get_today(self, user_id: str) -> dict[str, int]:
-        """取今日 token,缺失字段返回 0"""
-        return self._get_bucket(user_id, datetime.date.today().strftime("%Y-%m"), "daily")
+        """取今日 token,缺失字段返回 0(必须是 %Y-%m-%d,不是月份)"""
+        return self._get_bucket(
+            user_id, datetime.date.today().strftime("%Y-%m-%d"), "daily"
+        )
 
     def get_month(self, user_id: str) -> dict[str, int]:
         """取本月 token,缺失字段返回 0"""

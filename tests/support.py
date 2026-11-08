@@ -10,6 +10,7 @@ unrelated managers are substitutes. Not a real AstrBot integration test.
 import ast
 import asyncio
 import itertools
+import os
 import tempfile
 import copy
 import datetime
@@ -79,6 +80,10 @@ class OtherManager:
 class FakeStar:
     def __init__(self, context):
         self.context = context
+        self._data_dir = tempfile.mkdtemp(prefix="dailylimit-plugin-", dir=_DATA_DIR)
+
+    def get_data_path(self):
+        return self._data_dir
 
 
 class Message:
@@ -158,7 +163,7 @@ def plugin_class(root):
                              keywords=[], body=body, decorator_list=[])
     module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0),
                               extracted], type_ignores=[])
-    namespace = {"FakeStar": FakeStar, "datetime": CLOCK, "time": time,
+    namespace = {"FakeStar": FakeStar, "datetime": CLOCK, "time": time, "os": os,
                  "json": json, "Logger": FakeLogger, "RedisClient": FakeRedisClient,
                  "WebServer": None, "MessageType": MessageType,
                  "AstrMessageEvent": Event,
@@ -171,7 +176,8 @@ def plugin_class(root):
                                 ("security_handler", "SecurityHandler"),
                                 ("json_store", "JsonStore"), ("vip_manager", "VipManager"),
                                 ("afdian_webhook", "AfdianWebhookHandler"),
-                                ("token_tracker", "TokenTracker")]:
+                                ("token_tracker", "TokenTracker"),
+                                ("user_terms", "UserTerms")]:
         namespace[classname] = source_class(root, filename, classname)
     for classname in ["VersionChecker", "HelpManager", "WebManager", "MessagesHandler"]:
         namespace[classname] = OtherManager
@@ -186,6 +192,7 @@ DEFAULT_CONFIG = {
                "time_period_limits": "", "skip_patterns": ["#", "*"],
                "daily_reset_time": "00:00", "custom_messages": {"zero_usage_reminder_enabled": False}},
     "security": {"anti_abuse_enabled": False}, "redis": {},
+    "user_terms": {"enabled": False},
 }
 
 

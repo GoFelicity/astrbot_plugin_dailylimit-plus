@@ -612,5 +612,131 @@
         "hint": "可选,在爱发电后台开放 API 页面获取"
       }
     }
+  },
+  "user_terms": {
+    "description": "用户条款(内置子插件): 要求先同意条款才能使用",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用用户条款",
+        "type": "bool",
+        "default": true,
+        "group": "用户条款",
+        "hint": "关闭后不拦截任何会话"
+      },
+      "user_scope_mode": {
+        "description": "用户条款生效范围",
+        "type": "string",
+        "default": "all",
+        "options": [
+          "all",
+          "manual"
+        ],
+        "group": "用户条款",
+        "hint": "all=全部私聊用户；manual=只控 user_sids"
+      },
+      "group_scope_mode": {
+        "description": "群组条款生效范围",
+        "type": "string",
+        "default": "all",
+        "options": [
+          "all",
+          "manual"
+        ],
+        "group": "用户条款",
+        "hint": "all=全部群组；manual=只控 group_sids"
+      },
+      "user_sids": {
+        "description": "用户 SID 列表",
+        "type": "list",
+        "default": [],
+        "group": "用户条款",
+        "hint": "形如 user:123456；manual 模式下的目标，all 模式下也生效"
+      },
+      "group_sids": {
+        "description": "群组 SID 列表",
+        "type": "list",
+        "default": [],
+        "group": "用户条款",
+        "hint": "形如 group:123456"
+      },
+      "exempt_user_sids": {
+        "description": "豁免用户 SID",
+        "type": "list",
+        "default": [],
+        "group": "用户条款",
+        "hint": "命中后无需签署"
+      },
+      "exempt_group_sids": {
+        "description": "豁免群组 SID",
+        "type": "list",
+        "default": [],
+        "group": "用户条款",
+        "hint": "命中后无需签署"
+      },
+      "disabled_user_sids": {
+        "description": "禁用用户 SID",
+        "type": "list",
+        "default": [],
+        "group": "用户条款",
+        "hint": "优先级最高，命中直接拒绝"
+      },
+      "disabled_group_sids": {
+        "description": "禁用群组 SID",
+        "type": "list",
+        "default": [],
+        "group": "用户条款",
+        "hint": "优先级最高，命中直接拒绝"
+      },
+      "accept_phrase": {
+        "description": "同意语",
+        "type": "string",
+        "default": "我已知晓并同意遵守条款所有内容",
+        "group": "用户条款",
+        "hint": "用户发送这句才视为同意"
+      },
+      "terms_text": {
+        "description": "用户条款正文",
+        "type": "text",
+        "default": "1. 使用机器人时请遵守所在平台与群组规则。\n2. 不要发送违法、侵权、骚扰或滥用内容。\n3. 管理员可根据实际情况停止服务或清理违规使用记录。",
+        "group": "用户条款"
+      },
+      "prompt_message": {
+        "description": "首次提示",
+        "type": "text",
+        "default": "请同意以下条款来得到使用权限：\n{terms}\n\n当前需要签署：{scopes}\n请阅读后回复“{accept_phrase}”；回复“拒绝”将无法继续使用。",
+        "group": "用户条款"
+      },
+      "premature_accept_message": {
+        "description": "未阅读就同意时的提示",
+        "type": "text",
+        "default": "请先阅读以下用户条款，再回复“{accept_phrase}”完成签署：\n{terms}\n\n当前需要签署：{scopes}",
+        "group": "用户条款"
+      },
+      "accepted_message": {
+        "description": "同意后提示",
+        "type": "text",
+        "default": "已记录你对 {scopes} 的用户条款同意状态，现在可以继续使用。",
+        "group": "用户条款"
+      },
+      "rejected_message": {
+        "description": "拒绝后提示",
+        "type": "text",
+        "default": "你已拒绝用户条款，将无法继续使用机器人。",
+        "group": "用户条款"
+      },
+      "invalid_message": {
+        "description": "无效回复提示",
+        "type": "text",
+        "default": "请回复“{accept_phrase}”完成签署，或回复“拒绝”放弃使用。",
+        "group": "用户条款"
+      },
+      "disabled_message": {
+        "description": "禁用提示",
+        "type": "text",
+        "default": "该用户或群组已被禁用，请联系开发者处理。",
+        "group": "用户条款"
+      }
+    }
   }
 }

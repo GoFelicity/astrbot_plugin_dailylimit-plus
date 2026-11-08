@@ -56,6 +56,7 @@ JsonStore = None
 VipManager = None
 AfdianWebhookHandler = None
 TokenTracker = None
+UserTerms = None
 _import_error = None
 
 def _load_core_module(module_name):
@@ -93,6 +94,7 @@ try:
     VipManager = _load_core_module("vip_manager").VipManager
     AfdianWebhookHandler = _load_core_module("afdian_webhook").AfdianWebhookHandler
     TokenTracker = _load_core_module("token_tracker").TokenTracker
+    UserTerms = _load_core_module("user_terms").UserTerms
 except Exception as e:
     _import_error = str(e)
 
@@ -179,6 +181,9 @@ class DailyLimitPlugin(star.Star):
 
         # Plus 版: 单用户 token 跟踪器(在 data/token_stats.json)
         self.token_tracker = TokenTracker(self)
+
+        # 内置子插件: 用户条款签署(astrbot_plugin_user_terms 移植版)
+        self.user_terms = UserTerms(self) if UserTerms else None
 
         # 加载群组和用户特定限制（通过ConfigLoader模块）
         self.config_loader.load_limits_from_config()
@@ -1806,6 +1811,12 @@ class DailyLimitPlugin(star.Star):
             user_id, abuse_result = details
             await self._handle_abuse_detected(event, user_id, abuse_result)
             return False
+        if decision == "terms":
+            text = (details or ("",))[0] or ""
+            if text:
+                await event.send(MessageChain().message(text))
+            event.stop_event()
+            return False
 
         user_id, group_id, usage, limit = details
         if decision == "exceeded":
@@ -1854,6 +1865,12 @@ class DailyLimitPlugin(star.Star):
         # 群白名单(配置) - 直接放行,不扣
         if self._is_unlimited_group(event):
             return "exempt", ()
+
+        # 用户条款: 未签署先发条款并拦下本次请求
+        if getattr(self, "user_terms", None):
+            allowed, terms_message = self.user_terms.check(event)
+            if not allowed:
+                return "terms", (terms_message,)
 
         # 基础检查(只检查消息内容,不做 Redis 校验,Redis 不可用自动降级 JSON)
         if not self._should_process_request(event, req):
@@ -2362,6 +2379,95 @@ class DailyLimitPlugin(star.Star):
     def limit_command_group(self):
         """限制命令组"""
         pass
+
+    # ------------------------------------------------------------------
+    # 内置子插件: 用户条款(astrbot_plugin_user_terms 移植)
+    # ------------------------------------------------------------------
+    @filter.command_group("terms")
+    def terms_command_group(self):
+        """用户条款管理指令组"""
+        pass
+
+    def _terms_enabled(self) -> bool:
+        return bool(getattr(self, "user_terms", None))
+
+    @filter.permission_type(PermissionType.ADMIN)
+    @terms_command_group.command("help")
+    async def terms_help(self, event: AstrMessageEvent):
+        """用户条款管理帮助"""
+        msg = (
+            "📜 用户条款管理\n"
+            "══════════════\n"
+            "/terms status [sid] - 查看签署状态与统计\n"
+            "/terms reset <sid> - 重置某目标(如 user:123 / group:456)\n"
+            "/terms publish <正文> - 发布新条款(所有人需重新签署)\n"
+            "/terms help - 显示本帮助\n\n"
+            "判定顺序: 禁用 → 豁免 → 手动 SID → 生效范围"
+        )
+        event.set_result(MessageEventResult().message(msg))
+
+    @filter.permission_type(PermissionType.ADMIN)
+    @terms_command_group.command("status")
+    async def terms_status(self, event: AstrMessageEvent):
+        """查看条款签署状态"""
+        if not self._terms_enabled():
+            event.set_result(MessageEventResult().message("用户条款模块未加载"))
+            return
+        args = (event.message_str or "").split()
+        if len(args) >= 3:
+            detail = self.user_terms.describe(args[2])
+            text = (
+                f"📜 {detail['scope']}\n"
+                f"状态: {detail['status']}\n"
+                f"已提示: {'是' if detail['prompted'] else '否'}\n"
+                f"已签署: {'是' if detail['signed'] else '否'}"
+            )
+        else:
+            stats = self.user_terms.stats()
+            text = (
+                f"📜 用户条款统计\n"
+                f"记录目标: {stats['total']}\n"
+                f"已签署: {stats['signed']}\n"
+                f"条款版本: {self.user_terms.revision()}"
+            )
+        event.set_result(MessageEventResult().message(text))
+
+    @filter.permission_type(PermissionType.ADMIN)
+    @terms_command_group.command("reset")
+    async def terms_reset(self, event: AstrMessageEvent):
+        """重置某目标的签署状态"""
+        if not self._terms_enabled():
+            event.set_result(MessageEventResult().message("用户条款模块未加载"))
+            return
+        parts = (event.message_str or "").split(maxsplit=2)
+        if len(parts) < 3:
+            event.set_result(MessageEventResult().message("用法: /terms reset user:123456"))
+            return
+        scope_id = parts[2].strip()
+        ok = self.user_terms.reset(scope_id)
+        event.set_result(
+            MessageEventResult().message(
+                f"✅ 已重置 {scope_id}" if ok else f"⚠️ 没有找到 {scope_id} 的记录"
+            )
+        )
+
+    @filter.permission_type(PermissionType.ADMIN)
+    @terms_command_group.command("publish")
+    async def terms_publish(self, event: AstrMessageEvent):
+        """发布新条款正文(所有人需重新签署)"""
+        if not self._terms_enabled():
+            event.set_result(MessageEventResult().message("用户条款模块未加载"))
+            return
+        parts = (event.message_str or "").split(maxsplit=2)
+        if len(parts) < 3 or not parts[2].strip():
+            event.set_result(MessageEventResult().message("用法: /terms publish <正文>"))
+            return
+        self.user_terms.publish(parts[2].strip())
+        event.set_result(
+            MessageEventResult().message(
+                f"✅ 已发布新条款(版本 {self.user_terms.revision()}),所有用户需重新签署"
+            )
+        )
 
     def _get_default_messages(self) -> dict:
         """获取默认消息配置（代理方法）"""

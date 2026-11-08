@@ -1,3 +1,17 @@
+### v2.9.3（2026.11.08）
+
+#### 修复 token 今日统计 + 内置用户条款子插件
+
+- **修复 `/my` 今日 token 恒为 0** - `TokenTracker.get_today()` 误用 `%Y-%m`（月份键）去查 `daily` 桶，永远查不到当天记录；改为 `%Y-%m-%d` 后 `/my`、`/limit_status` 能正常显示"今日 token / 本月累计"
+- **内置用户条款（移植 astrbot_plugin_user_terms）** - 作为子模块 `core/user_terms.py` 内置，不再需要单独装插件、也不依赖 SQLite
+  - 用户作用域（私聊）与群组作用域各一套"全部 / 手动 SID"
+  - 判定顺序：禁用 → 豁免 → 手动 SID → 生效范围
+  - 首次触发只发条款并记 prompted；第二次发同意语才签署
+  - 条款正文变更（发布新条款）后需重新签署
+  - 状态存 `data/user_terms.json`
+- **新管理指令** - `/terms help`、`/terms status [sid]`、`/terms reset <sid>`、`/terms publish <正文>`
+- **回归测试** - 新增条款拦截/签署/豁免/禁用/重签 7 项与 token 今日统计 1 项，全套 117 项通过（17 项需真实环境跳过）
+
 ### v2.9.2（2026.11.08）
 
 #### 修复 Web 面板统计一直显示旧数据
