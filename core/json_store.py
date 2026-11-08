@@ -166,6 +166,45 @@ class JsonStore:
 
     # ---------- 通用日计数器(Redis 的 JSON 回退后端) ----------
 
+    def counter_period_date(self) -> str:
+        """计数器的归属日期(与 Redis 键一致,遵循自定义重置时间)"""
+        try:
+            return self.plugin.redis_keys.get_reset_period_date()
+        except Exception:
+            return self._today_str()
+
+    def today_counters(self) -> dict[str, int]:
+        """返回当前重置周期内所有计数(key -> 次数,只含 >0 的)"""
+        prefix = f"astrbot:daily_limit:{self.counter_period_date()}:"
+        counters = self.load().get(self.COUNTERS_KEY) or {}
+        result: dict[str, int] = {}
+        for key, record in counters.items():
+            if not str(key).startswith(prefix):
+                continue
+            if not isinstance(record, dict):
+                continue
+            try:
+                value = int(record.get("count", 0))
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                result[str(key)] = value
+        return result
+
+    def _prune_counters(self, data: dict[str, Any]) -> None:
+        """只保留最近 7 个周期的计数,避免文件无限增长"""
+        counters = data.get(self.COUNTERS_KEY)
+        if not isinstance(counters, dict) or len(counters) <= 200:
+            return
+        def period_of(key: str) -> str:
+            parts = str(key).split(":")
+            return parts[2] if len(parts) > 2 else ""
+        periods = sorted({period_of(k) for k in counters}, reverse=True)[:7]
+        keep = set(periods)
+        data[self.COUNTERS_KEY] = {
+            k: v for k, v in counters.items() if period_of(k) in keep
+        }
+
     def get_counter(self, key: str) -> int:
         """读取当日计数器(跨天自动归零)"""
         record = (self.load().get(self.COUNTERS_KEY) or {}).get(str(key))
@@ -180,7 +219,7 @@ class JsonStore:
         """当日计数器 +1 并返回新值"""
         data = self.load()
         counters = data.setdefault(self.COUNTERS_KEY, {})
-        today = self._today_str()
+        today = self.counter_period_date()
         record = counters.get(str(key))
         if not isinstance(record, dict) or record.get("date") != today:
             record = {"date": today, "count": 0}
@@ -189,6 +228,7 @@ class JsonStore:
             record["count"] = max(0, int(record.get("count", 0))) + 1
         except (TypeError, ValueError):
             record["count"] = 1
+        self._prune_counters(data)
         self.save()
         return record["count"]
 

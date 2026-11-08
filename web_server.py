@@ -693,26 +693,37 @@ class WebServer:
         return stats
 
     def _get_usage_stats_fallback(self):
-        """Redis 不可用时从 JSON 存储获取统计"""
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        """Redis 不可用时从 JSON 计数器获取统计
+
+        Plus 版修正: 只认「当前重置周期」的计数器键。
+        旧实现用 daily_limit - remaining 反推已用次数,而 remaining 只在
+        真正调用 LLM 时更新、也没人触发跨天重置,AI 停用后就会把最后一天的
+        数字当成今天的数据一直显示(面板"卡在旧数据"的根因)。
+        """
+        today = self.plugin._get_reset_period_date()
         stats = self._initialize_stats_dict(today)
         store = getattr(self.plugin, "json_store", None)
-        if store is not None:
-            users = store.all_users()
-            active = 0
-            total = 0
-            for uid, info in users.items():
-                daily = int(info.get("daily_limit", 0) or 0)
-                remain = int(info.get("remaining", 0) or 0)
-                used = max(0, daily - remain)
-                if used > 0 or daily > 0:
-                    active += 1
-                total += used
-            stats["active_users"] = active
-            stats["total_requests"] = total
-            stats["total_users"] = len(users)
-            if active > 0:
-                stats["avg_requests_per_user"] = round(total / active, 2)
+        if store is None:
+            return stats
+
+        counters = store.today_counters()
+        user_prefix = f"astrbot:daily_limit:{today}:user:"
+        group_prefix = f"astrbot:daily_limit:{today}:group:"
+
+        users = {k: v for k, v in counters.items() if k.startswith(user_prefix)}
+        groups = {k: v for k, v in counters.items() if k.startswith(group_prefix)}
+
+        total_requests = sum(users.values()) + sum(groups.values())
+        stats["active_users"] = len(users)
+        stats["active_groups"] = len(groups)
+        stats["total_users"] = len(store.all_users())
+        stats["total_requests"] = total_requests
+        stats["avg_requests_per_user"] = (
+            round(total_requests / len(users), 2) if users else 0
+        )
+
+        # 一并落盘,趋势图才会随周期更新(旧实现这里直接 return,趋势永远停在旧文件)
+        self._save_daily_stats(stats)
         return stats
 
     def _update_active_users_stats(self, stats, today):
