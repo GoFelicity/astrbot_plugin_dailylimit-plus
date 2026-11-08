@@ -135,10 +135,9 @@ class ConfigManager:
         """
         验证配置结构完整性
 
-        Returns:
-            bool: 配置结构是否完整
+        Plus 版: redis 不再是必需,默认为可选(本插件使用 JSON 存储)
         """
-        required_sections = ["limits", "redis"]
+        required_sections = ["limits"]
         required_limits_fields = [
             "default_daily_limit",
             "exempt_users",

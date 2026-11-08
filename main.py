@@ -18,7 +18,7 @@ from astrbot.api.event import (  # type: ignore
 )
 from astrbot.api.event.filter import PermissionType  # type: ignore
 from astrbot.api.platform import MessageType  # type: ignore
-from astrbot.api.provider import ProviderRequest  # type: ignore
+from astrbot.api.provider import LLMResponse, ProviderRequest  # type: ignore
 
 # Web服务器导入
 WebServer = None
@@ -54,6 +54,9 @@ WebManager = None
 RedisKeys = None
 SecurityHandler = None
 MessagesHandler = None
+JsonStore = None
+VipManager = None
+AfdianWebhookHandler = None
 _import_error = None
 
 def _load_core_module(module_name):
@@ -87,19 +90,45 @@ try:
     RedisKeys = _load_core_module("redis_keys").RedisKeys
     SecurityHandler = _load_core_module("security_handler").SecurityHandler
     MessagesHandler = _load_core_module("messages_handler").MessagesHandler
+    JsonStore = _load_core_module("json_store").JsonStore
+    VipManager = _load_core_module("vip_manager").VipManager
+    AfdianWebhookHandler = _load_core_module("afdian_webhook").AfdianWebhookHandler
 except Exception as e:
     _import_error = str(e)
 
 
+# Plus 版: 从 metadata.yaml 读取插件元数据(版本/作者/仓库),
+# 便于一处维护全端统一,避免 @star.register 装饰器中写死
+def _load_plugin_meta():
+    try:
+        import os
+        import yaml
+        meta_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.yaml")
+        if os.path.isfile(meta_path):
+            with open(meta_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+    except Exception:
+        pass
+    return {}
+
+
+_META = _load_plugin_meta()
+_META_NAME = _META.get("name", "daily_limit")
+_META_DESC = _META.get("desc", "限制用户每日调用大模型的次数")
+_META_AUTHOR = _META.get("author", "left666 & Sakura520222")
+_META_VERSION = _META.get("version", "v2.8.9")
+_META_REPO = _META.get("repo", "https://github.com/GoFelicity/astrbot_plugin_dailylimit-plus.git")
+
+
 @star.register(
-    name="daily_limit",
-    desc="限制用户每日调用大模型的次数",
-    author="left666 & Sakura520222",
-    version="v2.8.9",
-    repo="https://github.com/left666/astrbot_plugin_daily_limit",
+    name=_META_NAME,
+    desc=_META_DESC,
+    author=_META_AUTHOR,
+    version=_META_VERSION,
+    repo=_META_REPO,
 )
 class DailyLimitPlugin(star.Star):
-    """限制群组成员每日调用大模型的次数"""
+    """限制群组成员每日调用大模型的次数(Plus 版: 订阅制 + 群白名单)"""
 
     def __init__(self, context: star.Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -130,7 +159,7 @@ class DailyLimitPlugin(star.Star):
             Logger, RedisClient, ConfigManager, ConfigLoader, Limiter, Security,
             UsageTracker, MessageBuilder, VersionChecker, HelpManager,
             StatsAnalyzer, TimePeriodManager, WebManager, RedisKeys,
-            SecurityHandler, MessagesHandler
+            SecurityHandler, MessagesHandler, JsonStore, VipManager, AfdianWebhookHandler
         ]
         if any(m is None for m in required_modules):
             # 核心模块导入失败，无法继续
@@ -155,6 +184,22 @@ class DailyLimitPlugin(star.Star):
         self.security_handler = SecurityHandler(self)
         self.messages_handler = MessagesHandler(self)
 
+        # JSON 存储 + VIP 管理 + 爱发电 Webhook(替代 Redis 主额度逻辑)
+        # Plus 版: 优先使用 AstrBot 官方 get_data_path() 获取数据目录(规范),
+        # 缺则回退到配置项/默认值
+        data_file = self.config.get("vip", {}).get("data_file", "data/user_data.json")
+        if hasattr(self, "get_data_path") and not os.path.isabs(data_file):
+            # 新版 AstrBot 推荐做法: 数据持久化到 data/ 目录,避免更新/重装时丢失
+            data_file = os.path.join(self.get_data_path(), "user_data.json")
+        self.json_store = JsonStore(self, file_path=data_file)
+        self.vip_manager = VipManager(self, self.json_store)
+        self.afdian_handler = AfdianWebhookHandler(self, self.vip_manager)
+
+        # Plus 版: 单用户 token 跟踪器(在 data/token_stats.json)
+        from core.token_tracker import TokenTracker  # 局部 import 避免循环
+
+        self.token_tracker = TokenTracker(self)
+
         # 加载群组和用户特定限制（通过ConfigLoader模块）
         self.config_loader.load_limits_from_config()
 
@@ -169,15 +214,38 @@ class DailyLimitPlugin(star.Star):
 
         # 初始化Web服务器（通过WebManager模块）
         if WebServer is None:
-            self._log_warning("Web服务器模块导入失败，Web管理界面功能将不可用")
+            # Plus 版: 明确告诉用户缺什么依赖 + 怎么装
+            self._log_warning(
+                "Web 管理界面不可用:未安装 flask / flask-cors,"
+                "请在 AstrBot 环境中执行: pip install flask flask-cors;"
+                "插件其它功能(LLM 限额/订阅/爱发电)不受影响"
+            )
         else:
             # 初始化Web服务器
             self.web_manager.init_web_server()
             # 同步web_server引用
             self.web_server = self.web_manager.web_server
+            # 注册爱发电 Webhook 路由(挂载到同一 Flask app)
+            self._register_afdian_webhook()
 
         # 初始化版本检查功能
         self.version_checker.init_version_check()
+
+    def _register_afdian_webhook(self):
+        """将爱发电 Webhook 路由挂载到现有 Flask app"""
+        try:
+            if not self.web_server or not getattr(self.web_server, "app", None):
+                self._log_warning("Web服务器未就绪,跳过爱发电 Webhook 注册")
+                return
+            afdian_cfg = self.config.get("afdian", {})
+            if not afdian_cfg.get("enabled", True):
+                self._log_info("爱发电 Webhook 未启用(config.afdian.enabled=false)")
+                return
+            path = afdian_cfg.get("webhook_path", "/afdian_webhook")
+            self.afdian_handler.register_flask_route(self.web_server.app, path=path)
+            self._log_info("爱发电 Webhook 路由已注册: POST {}", path)
+        except Exception as e:
+            self._log_error("注册爱发电 Webhook 失败: {}", str(e))
 
     def _load_limits_from_config(self):
         """从配置文件加载群组和用户特定限制（代理方法）"""
@@ -771,8 +839,17 @@ class DailyLimitPlugin(star.Star):
         self.config.save_config()
 
     def _init_redis(self):
-        """初始化Redis连接"""
-        self.redis_client.init_redis()
+        """初始化Redis连接(Plus: 容错处理,失败不阻塞)"""
+        try:
+            self.redis_client.init_redis()
+        except Exception as e:
+            # 软启动: Redis 任何异常都吞掉,主流程继续
+            self._log_error("Redis 初始化异常(已忽略): {}", str(e))
+            try:
+                self.redis_client._enabled = False
+                self.redis_client.redis_client = None
+            except Exception:
+                pass
         self.redis = self.redis_client.redis
 
     def _init_web_server(self):
@@ -1104,69 +1181,62 @@ class DailyLimitPlugin(star.Star):
         return True
 
     def _get_user_limit(self, user_id, group_id=None):
-        """获取用户的调用限制次数"""
-        if self.limiter:
-            return self.limiter.get_user_limit(user_id, group_id)
+        """获取用户的调用限制次数(VIP 模式:基于 JSON 存储)"""
+        # 优先: 豁免用户(无限)
+        if str(user_id) in self.config["limits"].get("exempt_users", []):
+            return float("inf")
 
-        # 使用内置实现（兼容旧代码）
-        user_id_str = str(user_id)
-
-        # 检查用户是否豁免（优先级最高）
-        if user_id_str in self.config["limits"]["exempt_users"]:
-            return float("inf")  # 无限制
-
-        # 检查时间段限制（优先级第二）
-        time_period_limit = self.time_period_mgr.get_current_time_period_limit()
-        if time_period_limit is not None:
-            return time_period_limit
-
-        # 检查用户是否为优先级用户（优先级第三）
-        if user_id_str in self.config["limits"].get("priority_users", []):
-            # 优先级用户在任何群聊中只受特定限制，不参与特定群聊限制
-            if user_id_str in self.user_limits:
-                return self.user_limits[user_id_str]
-            else:
-                return self.config["limits"]["default_daily_limit"]
-
-        # 检查用户特定限制
-        if user_id_str in self.user_limits:
-            return self.user_limits[user_id_str]
-
-        # 检查群组特定限制
-        if group_id and str(group_id) in self.group_limits:
-            return self.group_limits[str(group_id)]
-
-        # 返回默认限制
-        return self.config["limits"]["default_daily_limit"]
-
-    def _get_usage_by_type(self, user_id=None, group_id=None):
-        """通用使用次数获取函数"""
-        if not self.redis:
-            return 0
-
+        # 时间段限制(优先级最高,继续走 Redis 旧路径或内置实现)
         try:
-            # 检查时间段限制（优先级最高）
             time_period_limit = self.time_period_mgr.get_current_time_period_limit()
             if time_period_limit is not None:
-                # 有时间段限制时，使用时间段内的使用次数
+                return time_period_limit
+        except Exception:
+            pass
+
+        # 走 VIP / JSON 存储主路径
+        if getattr(self, "vip_manager", None):
+            return self.vip_manager.get_user_limit(user_id)
+
+        # fallback: 原 Redis 逻辑
+        if self.limiter:
+            return self.limiter.get_user_limit(user_id, group_id)
+        return self.config["limits"].get("default_daily_limit", 25)
+
+    def _get_usage_by_type(self, user_id=None, group_id=None):
+        """通用使用次数获取函数(VIP 模式)"""
+        # 群组共享模式(若配置)继续走 Redis
+        try:
+            time_period_limit = self.time_period_mgr.get_current_time_period_limit()
+            if time_period_limit is not None and getattr(self, "redis", None):
                 return self.time_period_mgr.get_time_period_usage(user_id, group_id)
+        except Exception:
+            pass
 
-            # 没有时间段限制时，使用日使用次数
-            if user_id is None:
-                key = self._get_group_key(group_id)
-            else:
-                key = self._get_user_key(user_id, group_id)
+        # VIP / JSON 存储主路径(已用 = 总额度 - 剩余)
+        if user_id is not None and getattr(self, "vip_manager", None):
+            try:
+                user = self.vip_manager.check_and_reset(user_id)
+                limit = int(user.get("daily_limit", 0))
+                remaining = int(user.get("remaining", 0))
+                return max(0, limit - remaining)
+            except Exception as e:
+                self._log_error("获取用户已用次数失败(用户 {}): {}", user_id, str(e))
+                # 异常时按"已用光"算,触发拒绝路径(不再 fallthrough 到 redis 分支)
+                return self._get_user_limit(user_id, group_id)
 
-            usage = self.redis.get(key)
-            return int(usage) if usage else 0
-        except Exception as e:
-            self._log_error(
-                "获取使用次数失败 (用户: {}, 群组: {}): {}", user_id, group_id, str(e)
-            )
+        # fallback: 旧 Redis
+        if not self.redis:
             return 0
+        if user_id is None:
+            key = self._get_group_key(group_id)
+        else:
+            key = self._get_user_key(user_id, group_id)
+        usage = self.redis.get(key)
+        return int(usage) if usage else 0
 
     def _get_user_usage(self, user_id, group_id=None):
-        """获取用户已使用次数（兼容旧版本）"""
+        """获取用户已使用次数(VIP 模式)"""
         return self._get_usage_by_type(user_id=user_id, group_id=group_id)
 
     def _get_group_usage(self, group_id):
@@ -1174,46 +1244,51 @@ class DailyLimitPlugin(star.Star):
         return self._get_usage_by_type(group_id=group_id)
 
     def _increment_usage_by_type(self, user_id=None, group_id=None):
-        """通用使用次数增加函数"""
+        """通用使用次数增加函数(VIP 模式)"""
+        # 时间段限制(继续走 Redis)
+        try:
+            time_period_limit = self.time_period_mgr.get_current_time_period_limit()
+            if time_period_limit is not None and getattr(self, "redis", None):
+                return self._increment_time_period_usage(user_id, group_id)
+        except Exception:
+            pass
+
+        # VIP / JSON 存储主路径
+        if user_id is not None and getattr(self, "vip_manager", None):
+            try:
+                new_remaining = self.vip_manager.consume(user_id)
+                if new_remaining < 0:
+                    # consume 返回 < 0 表示额度已用尽
+                    self._log_warning("扣减拒绝(用户 {} 额度已用尽)", user_id)
+                    return False
+                return True
+            except Exception as e:
+                self._log_error("扣减用户额度失败(用户 {}): {}", user_id, str(e))
+                return False
+
+        # fallback: 旧 Redis
         if not self.redis:
             return False
-
+        if user_id is None:
+            key = self._get_group_key(group_id)
+        else:
+            key = self._get_user_key(user_id, group_id)
         try:
-            # 检查时间段限制（优先级最高）
-            time_period_limit = self.time_period_mgr.get_current_time_period_limit()
-            if time_period_limit is not None:
-                # 有时间段限制时，增加时间段使用次数
-                if self._increment_time_period_usage(user_id, group_id):
-                    return True
-
-            # 没有时间段限制时，增加日使用次数
-            if user_id is None:
-                key = self._get_group_key(group_id)
-            else:
-                key = self._get_user_key(user_id, group_id)
-
-            # 增加计数并设置过期时间
             pipe = self.redis.pipeline()
             pipe.incr(key)
-
-            # 设置过期时间到下次重置时间
-            seconds_until_tomorrow = self._get_seconds_until_tomorrow()
-            pipe.expire(key, seconds_until_tomorrow)
-
+            pipe.expire(key, self._get_seconds_until_tomorrow())
             pipe.execute()
             return True
         except Exception as e:
-            self._log_error(
-                "增加使用次数失败 (用户: {}, 群组: {}): {}", user_id, group_id, str(e)
-            )
+            self._log_error("增加使用次数失败 (用户: {}, 群组: {}): {}", user_id, group_id, str(e))
             return False
 
     def _increment_user_usage(self, user_id, group_id=None):
-        """增加用户使用次数（兼容旧版本）"""
+        """增加用户使用次数(VIP 模式)"""
         return self._increment_usage_by_type(user_id=user_id, group_id=group_id)
 
     def _increment_group_usage(self, group_id):
-        """增加群组共享使用次数"""
+        """增加群组共享使用次数(旧逻辑)"""
         return self._increment_usage_by_type(group_id=group_id)
 
     def _record_usage(self, user_id, group_id=None, usage_type="llm_request"):
@@ -1447,11 +1522,13 @@ class DailyLimitPlugin(star.Star):
     def _should_process_request(
         self, event: AstrMessageEvent, req: ProviderRequest
     ) -> bool:
-        """检查是否应该处理请求（不再调用 stop_event，由调用者决定）"""
-        if not self._validate_redis_connection():
-            return False
+        """检查是否应该处理请求(不再调用 stop_event,由调用者决定)
 
-        if not req.prompt.strip() or self._should_skip_message(event.message_str):
+        Plus 版: Redis 是可选依赖,这里不再做 Redis 连通性校验;
+        limiter 会自动降级到 JSON 存储继续服务。Redis 状态只影响
+        性能,不影响"是否放行消息"的判断。
+        """
+        if self._should_skip_message(event.message_str or ""):
             return False
 
         return True
@@ -1477,6 +1554,14 @@ class DailyLimitPlugin(star.Star):
             tuple: (使用次数, 限制次数, 使用类型描述)
         """
         limit = self._get_user_limit(user_id, group_id)
+
+        # Plus 版: VIP 模式强制走用户级别(与 _increment_user_usage 保持一致)
+        # 避免旧 group_modes 默认 "shared" 时,_get_group_usage(group_id) 走 Redis fallback
+        # 返回 0,导致 usage<limit 误判放行,但 consume 实际已用尽造成放行
+        if getattr(self, "vip_manager", None):
+            usage = self._get_user_usage(user_id, group_id)
+            usage_type = "个人独立" if group_id is not None else "个人"
+            return usage, limit, usage_type
 
         if group_id is not None:
             group_mode = self._get_group_mode(group_id)
@@ -1692,38 +1777,42 @@ class DailyLimitPlugin(star.Star):
         """
         处理LLM请求事件
 
-        这是插件的核心事件处理函数，负责：
-        - 验证请求是否应该处理
-        - 检查用户权限和限制
-        - 检测异常使用行为（防刷机制）
-        - 记录使用情况
-        - 处理超过限制的情况
-        - 发送提醒消息
+        Plus 版:
+        - 群白名单/豁免用户: 直接放行,不扣
+        - 额度检查: 通过则立即扣减(立即扣 vs 延迟扣的选择理由:
+          延迟扣在 on_decorating_result 上,AstrBot 4.25.5 框架下 event
+          标记传递不稳定,导致实际不扣;改成立即扣,虽然 LLM 失败也会
+          扣次数,但 /my 数字可观测、逻辑可信赖)
+        - 预检查失败: stop_event() 阻止 LLM 调用
 
-        参数：
-            event: AstrMessageEvent对象，包含消息事件信息
-            req: ProviderRequest对象，包含LLM请求信息
+        参数:
+            event: AstrMessageEvent对象,包含消息事件信息
+            req: ProviderRequest对象,包含LLM请求信息
 
-        返回：
+        返回:
             bool: 是否允许继续处理请求
         """
-        # 首先获取用户ID，用于豁免检查
+        # 首先获取用户ID,用于豁免检查
         user_id = event.get_sender_id()
 
-        # 豁免用户检查 - 提前到最前面，确保豁免用户不受任何限制
+        # 豁免用户检查 - 提前到最前面,确保豁免用户不受任何限制
         if self._is_exempt_user(user_id):
             return True
 
-        # 基础检查（_should_process_request 不再调用 stop_event）
+        # 群白名单(配置) - 直接放行,不扣
+        if self._is_unlimited_group(event):
+            return True
+
+        # 基础检查(只检查消息内容,不做 Redis 校验,Redis 不可用自动降级 JSON)
         if not self._should_process_request(event, req):
             event.stop_event()
             return False
 
-        # 防刷机制检测（如果启用）
+        # 防刷机制检测(如果启用)
         if self.anti_abuse_enabled:
             abuse_result = self._detect_abuse_behavior(user_id, time.time())
             if abuse_result["is_abuse"]:
-                # 检测到异常使用行为，自动限制用户
+                # 检测到异常使用行为,自动限制用户
                 await self._handle_abuse_detected(event, user_id, abuse_result)
                 return False
 
@@ -1737,19 +1826,149 @@ class DailyLimitPlugin(star.Star):
 
         # 检查限制
         if usage >= limit:
+            # Plus 版: 用户可能被限额了 - 在拒绝前先主动核验一次爱发电
+            # 场景: 用户刚点链接付款但额度没及时生效
+            # 主动核验若有新订单,会升级用户并重新检查
+            upgraded = False
+            try:
+                verify_result = await self.afdian_handler.verify_user_payment(
+                    str(user_id)
+                )
+                if verify_result.get("upgraded"):
+                    upgraded = True
+                    self.logger.log_info(
+                        "用户 {} 主动核验后升级: {}",
+                        user_id,
+                        verify_result.get("reason"),
+                    )
+            except Exception as e:
+                self._log_error("主动核验异常(用户 {}): {}", user_id, str(e))
+
+            if upgraded:
+                # 升级成功,重新获取额度信息
+                usage, limit, usage_type = self._get_usage_info(
+                    user_id, group_id
+                )
+                if usage < limit:
+                    # 放行,立即扣减
+                    if not self._increment_user_usage(user_id, group_id):
+                        await self._handle_limit_exceeded(
+                            event, user_id, group_id, limit, limit
+                        )
+                        return False
+                    self._record_usage(user_id, group_id, "llm_request")
+                    return True
+
+            # 核验无新订单或仍超额,真正拒绝
             await self._handle_limit_exceeded(event, user_id, group_id, usage, limit)
             return False
 
-        # 发送提醒
-        remaining = limit - usage
-        if remaining in [1, 3, 5]:
-            await self._send_reminder(event, user_id, group_id, remaining)
-
-        # 增加使用次数
-        self._increment_usage(user_id, group_id)
+        # 通过: 立即扣减(放弃延迟扣,避免 on_decorating_result 标记丢失)
+        # Plus 版: 直调 _increment_user_usage,绕开 _increment_usage 的 group_mode 分支
+        # (原 _increment_usage 在群共享模式下会丢 user_id,导致扣到群共享额度而非用户额度;
+        # 用户需求 = 群白名单外的群 + 私聊 全按用户额度扣,不需要群共享模式)
+        if not self._increment_user_usage(user_id, group_id):
+            # 扣减失败(已用尽),触发拒绝
+            await self._handle_limit_exceeded(event, user_id, group_id, limit, limit)
+            return False
         self._record_usage(user_id, group_id, "llm_request")
-
         return True
+
+    @filter.on_llm_response()
+    async def on_llm_response(
+        self, event: AstrMessageEvent, response: LLMResponse
+    ):
+        """
+        LLM 响应完成后记录 token 消耗(单用户维度)
+
+        Plus 版改造:
+        - 框架在此钩子直接传 LLMResponse,其 .usage 是 TokenUsage 对象
+        - 只对真实 LLM 调用(非指令、非空 usage)累加
+        - 单用户隔离(同一个 user_id 的多次调用累加)
+        - 群白名单/豁免用户也记录(他们只是不限次,但仍消耗 token)
+        """
+        try:
+            usage = getattr(response, "usage", None)
+            if usage is None:
+                return
+
+            # TokenUsage 字段: input_other, input_cached, output
+            prompt_tokens = int(getattr(usage, "input_other", 0) or 0)
+            cached_tokens = int(getattr(usage, "input_cached", 0) or 0)
+            completion_tokens = int(getattr(usage, "output", 0) or 0)
+
+            user_id = str(
+                event.get_sender_id() or getattr(event, "_dailylimit_user_id", "") or ""
+            )
+            if not user_id:
+                return
+
+            # 群白名单/豁免用户: 也记录(token 仍消耗),但 _dailylimit_* 标记可能不存在
+            if hasattr(self, "token_tracker") and self.token_tracker:
+                self.token_tracker.record(
+                    user_id=user_id,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cached_tokens=cached_tokens,
+                )
+        except Exception as e:
+            self._log_error("记录 token 失败: {}", str(e))
+
+    @filter.on_decorating_result()
+    async def on_decorating_result(self, event: AstrMessageEvent):
+        """
+        消息即将发送前的钩子(占位)
+
+        Plus 版改造:
+        - 扣减已在 on_llm_request 立即完成,本钩子不再做扣减
+        - 保留"剩余次数提醒"功能(根据配置 limits.low_remaining_thresholds)
+        - 群白名单/豁免用户不走提醒(他们无限额)
+        """
+        # 群白名单不提醒
+        if self._is_unlimited_group(event):
+            return
+        # 兜底 user_id 提取
+        try:
+            user_id = event.get_sender_id()
+            if not user_id:
+                return
+            # 豁免用户不提醒
+            if self._is_exempt_user(user_id):
+                return
+            group_id = (
+                event.get_group_id()
+                if event.get_message_type() == MessageType.GROUP_MESSAGE
+                else None
+            )
+            usage, new_limit, _ = self._get_usage_info(user_id, group_id)
+            remaining = new_limit - usage
+            thresholds = self.config.get("limits", {}).get(
+                "low_remaining_thresholds", [1, 3, 5]
+            )
+            if not isinstance(thresholds, list):
+                thresholds = [1, 3, 5]
+            if remaining in thresholds:
+                await self._send_reminder(event, user_id, group_id, remaining)
+        except Exception as e:
+            self._log_error("on_decorating_result 提醒失败: {}", str(e))
+
+    def _is_unlimited_group(self, event: AstrMessageEvent) -> bool:
+        """判断当前消息是否来自群白名单(配置 vip.unlimited_group_ids)"""
+        try:
+            if event.get_message_type() != MessageType.GROUP_MESSAGE:
+                return False
+            group_id = str(event.get_group_id() or "")
+            if not group_id:
+                return False
+            white_list = self.config.get("vip", {}).get("unlimited_group_ids", []) or []
+            # 支持 str / int
+            if group_id in white_list:
+                return True
+            if group_id.isdigit() and int(group_id) in white_list:
+                return True
+            return False
+        except Exception:
+            return False
 
     @filter.command("limit_status")
     async def limit_status(self, event: AstrMessageEvent):
@@ -1808,13 +2027,213 @@ class DailyLimitPlugin(star.Star):
                 status_msg, user_id, group_id, time_period_limit, current_time_str
             )
 
+            # 追加 VIP 信息
+            status_msg += "\n\n" + self._build_vip_info(user_id)
+
         event.set_result(MessageEventResult().message(status_msg))
 
+    # ------------------------------------------------------------------
+    # VIP / 订阅 相关命令
+    # ------------------------------------------------------------------
+
+    def _build_vip_info(self, user_id) -> str:
+        """构造 VIP 信息文本(/my 与 /limit_status 共用)"""
+        if not getattr(self, "vip_manager", None):
+            return ""
+        info = self.vip_manager.describe_user(user_id)
+        level = info["vip_level"]
+        level_label = {
+            "normal": "普通用户",
+            "monthly": "月度会员",
+            "quarterly": "季度会员",
+            # 兼容老数据: 历史遗留的 permanent 档位
+            "permanent": "普通用户(已降级)",
+        }.get(level, level)
+        expire = info["vip_expire"] or "—"
+        lines = [
+            "👑 订阅信息",
+            f"  · 等级: {level_label}",
+            f"  · 到期: {expire}",
+            f"  · 每日上限: {info['daily_limit']} 次",
+            f"  · 今日剩余: {info['remaining']} 次",
+        ]
+        if level == "normal":
+            lines.append("  · 升级: 发送 /sponsor 查看赞助方式")
+        return "\n".join(lines)
+
+    @filter.command("my")
+    async def my_status(self, event: AstrMessageEvent):
+        """/my - 查看当前用户 VIP 与今日额度信息
+
+        Plus 版: 主动核验一次爱发电订单(若用户刚付款可立即生效)
+        """
+        user_id = event.get_sender_id()
+        if not getattr(self, "vip_manager", None):
+            event.set_result(MessageEventResult().message("VIP 系统未启用"))
+            return
+
+        # 主动核验(force=True 让用户立即看到升级效果,忽略缓存)
+        verify_note = ""
+        try:
+            verify_result = await self.afdian_handler.verify_user_payment(
+                str(user_id), force=True
+            )
+            if verify_result.get("upgraded"):
+                verify_note = (
+                    f"\n🎉 检测到新订单,已自动升级!({verify_result.get('new_orders', 1)} 个)\n"
+                )
+        except Exception as e:
+            self._log_error("/my 主动核验异常(用户 {}): {}", user_id, str(e))
+
+        info = self.vip_manager.describe_user(user_id)
+        level = info["vip_level"]
+        level_label = {
+            "normal": "普通用户",
+            "monthly": "月度会员",
+            "quarterly": "季度会员",
+        }.get(level, level)
+        expire_text = info["vip_expire"] or "—"
+
+        # 构造进度条(进度条宽度可配)
+        limit = info["daily_limit"]
+        remaining = info["remaining"]
+        used = max(0, limit - remaining)
+        bar_len = int(self.config.get("limits", {}).get("bar_length", 10))
+        bar_len = max(1, min(50, bar_len))
+        if limit > 0:
+            used_blocks = int(round(bar_len * used / limit)) if limit else 0
+            used_blocks = max(0, min(bar_len, used_blocks))
+            bar = "█" * used_blocks + "░" * (bar_len - used_blocks)
+        else:
+            bar = "░" * bar_len
+        percent = (used / limit * 100) if limit else 0
+        pct_text = f"{percent:.0f}%" if limit else "—"
+
+        msg = (
+            f"📋 我的订阅状态 (QQ: {info['user_id']})\n"
+            f"═════════════════════\n"
+            f"👑 等级: {level_label}\n"
+            f"📅 到期: {expire_text}\n"
+            f"🔄 重置日: {info['last_reset']}\n"
+            f"📊 今日: {used}/{limit} 次 ({pct_text})\n"
+            f"📈 {bar}\n"
+            f"🎯 剩余: {remaining} 次\n"
+        )
+        # Plus 版: 追加 token 消耗(单用户今日+本月),
+        # 内部已判断 show_token_usage 开关和 token_tracker 是否存在,失败静默返空串
+        if getattr(self, "message_builder", None):
+            msg += self.message_builder._build_token_line(
+                str(user_id), with_month=True
+            )
+        if verify_note:
+            msg += verify_note
+        if level == "normal":
+            afdian_link = self.config.get("afdian", {}).get("sponsor_url", "")
+            if afdian_link:
+                msg += f"\n💝 想要更多额度? 发送 /sponsor 查看赞助方式"
+        event.set_result(MessageEventResult().message(msg))
+
+    @filter.command("sponsor")
+    async def sponsor_info(self, event: AstrMessageEvent):
+        """/sponsor - 显示爱发电赞助链接与说明
+
+        Plus 版: 直接生成带 QQ 号的专属付款链接(custom_order_id),
+        用户点击付款后,下次调用 AI 时插件主动核验并自动升级。
+
+        Plus 版文案可配置: sponsor_text 节点,字段留空回退到内置默认。
+        """
+        afdian = self.config.get("afdian", {})
+        url = afdian.get("sponsor_url", "https://afdian.com")
+        monthly_base = afdian.get("monthly_url", "")
+        quarterly_base = afdian.get("quarterly_url", "")
+        monthly_sku_id = afdian.get("monthly_sku_id", "")
+        quarterly_sku_id = afdian.get("quarterly_sku_id", "")
+        monthly_price = afdian.get("monthly_price", "¥ 9.9/月")
+        quarterly_price = afdian.get("quarterly_price", "¥ 24.9/季")
+        normal_limit = self.vip_manager.get_daily_limit_by_level(
+            VipManager.LEVEL_NORMAL
+        )
+        monthly_limit = self.vip_manager.get_daily_limit_by_level(
+            VipManager.LEVEL_MONTHLY
+        )
+        quarterly_limit = self.vip_manager.get_daily_limit_by_level(
+            VipManager.LEVEL_QUARTERLY
+        )
+
+        # 动态生成带 QQ 号的链接(item/p 详情页 → 自动转 /order/create 付款页)
+        user_id = str(event.get_sender_id())
+        monthly_url = (
+            self.afdian_handler.build_sponsor_url(
+                monthly_base, user_id, sku_id=monthly_sku_id
+            )
+            if monthly_base
+            else ""
+        )
+        quarterly_url = (
+            self.afdian_handler.build_sponsor_url(
+                quarterly_base, user_id, sku_id=quarterly_sku_id
+            )
+            if quarterly_base
+            else ""
+        )
+
+        # Plus 版: 从 sponsor_text 配置读文案(空则用默认)
+        sponsor_cfg = self.config.get("sponsor_text", {}) or {}
+        defaults = {
+            "title": "💝 赞助支持,获得更多 AI 调用额度",
+            "description": "赞助后立即解锁更高额度,支持月/季付",
+            "free_tier": "🌟 免费用户: 每日 {limit} 次",
+            "monthly_tier": "📅 月度会员({price}): 每日 {limit} 次",
+            "quarterly_tier": "📆 季度会员({price}): 每日 {limit} 次",
+            "group_tip": "⭐ 群白名单用户: 无限次",
+            "footer": "💡 付款后回复任意消息自动激活 / 调 /my 手动核验",
+        }
+
+        def _fmt(key, **kwargs):
+            tpl = str(sponsor_cfg.get(key) or defaults[key])
+            try:
+                return tpl.format(limit=kwargs.get("limit", ""), price=kwargs.get("price", ""))
+            except (KeyError, IndexError):
+                return tpl  # 占位符配错就原样返回
+
+        msg_lines = [
+            _fmt("title"),
+            "═════════════════════",
+            _fmt("free_tier", limit=normal_limit),
+            _fmt("monthly_tier", limit=monthly_limit, price=monthly_price),
+            _fmt("quarterly_tier", limit=quarterly_limit, price=quarterly_price),
+            "",
+            "🎁 你的专属付款链接(已自动带上你的 QQ 号,无需再填备注):",
+        ]
+        if monthly_url:
+            msg_lines.append(f"  📅 月度: {monthly_url}")
+        if quarterly_url:
+            msg_lines.append(f"  📆 季度: {quarterly_url}")
+        if not monthly_url and not quarterly_url:
+            # 退回到主页,让用户手动填备注
+            msg_lines.append(f"  🔗 爱发电主页: {url}")
+        msg_lines += [
+            "",
+            _fmt("footer"),
+            "",
+            "📝 使用方式:",
+            "  1. 直接点击上方的链接完成付款(无需手动填备注)",
+            "  2. 付款后【下次调用 AI 时】插件会自动核验订单并升级额度",
+            "  3. 也可以发送 /my 主动触发核验,立即生效",
+            "",
+            "⚠️ 注意:",
+            "  · 链接已绑定你的 QQ 号,不要发给别人代付",
+            "  · 升级实时生效(下次 AI 调用时检测到新订单)",
+            "  · 同一订单只会处理一次,不会重复发放",
+            "  · 月度/季度会员到期后自动降级为普通用户",
+        ]
+        msg = "\n".join(msg_lines)
+        event.set_result(MessageEventResult().message(msg))
     @filter.command("限制帮助")
     async def limit_help_all(self, event: AstrMessageEvent):
         """显示本插件所有指令及其帮助信息"""
         help_msg = (
-            "🚀 日调用限制插件 v2.8.9 - 完整指令帮助\n"
+            "🚀 日调用限制插件 {} - 完整指令帮助\n".format(_META_VERSION),
             "═════════════════════════\n\n"
             "👤 用户指令（所有人可用）：\n"
             "├── /limit_status - 查看您今日的使用状态和剩余次数\n"
@@ -1878,7 +2297,7 @@ class DailyLimitPlugin(star.Star):
             "• 管理员可使用 /limit help 查看详细管理命令\n"
             "• 时间段限制优先级最高，会覆盖其他限制规则\n"
             "• 默认忽略模式：#、*（可自定义添加）\n\n"
-            "📝 版本信息：v2.8.9 | 作者：left666 | 改进：Sakura520222\n"
+            f"📝 版本信息:{_META_VERSION} | 作者:{_META_AUTHOR.split(' (')[0]}\n"
             "═════════════════════════"
         )
 
@@ -1925,7 +2344,7 @@ class DailyLimitPlugin(star.Star):
     @limit_command_group.command("messages")
     async def limit_messages(self, event: AstrMessageEvent):
         """管理自定义提醒消息配置（仅管理员）"""
-        args = event.message_str.strip().split()
+        args = (event.message_str or "").strip().split()
 
         # 检查命令格式：/limit messages [action] [type] [message]
         if len(args) < 3:
@@ -1953,7 +2372,7 @@ class DailyLimitPlugin(star.Star):
     @limit_command_group.command("skip_patterns")
     async def limit_skip_patterns(self, event: AstrMessageEvent):
         """管理忽略模式配置（仅管理员）"""
-        args = event.message_str.strip().split()
+        args = (event.message_str or "").strip().split()
 
         # 检查命令格式：/limit skip_patterns [action] [pattern]
         if len(args) < 3:
@@ -2032,7 +2451,7 @@ class DailyLimitPlugin(star.Star):
     @limit_command_group.command("resettime")
     async def limit_resettime(self, event: AstrMessageEvent):
         """管理每日重置时间配置（仅管理员）"""
-        args = event.message_str.strip().split()
+        args = (event.message_str or "").strip().split()
 
         # 检查命令格式：/limit resettime [action] [time]
         if len(args) < 3:
@@ -2278,7 +2697,7 @@ class DailyLimitPlugin(star.Star):
     @limit_command_group.command("security")
     async def limit_security(self, event: AstrMessageEvent):
         """防刷机制管理命令（仅管理员）"""
-        args = event.message_str.strip().split()
+        args = (event.message_str or "").strip().split()
 
         # 检查命令格式：/limit security [action] [user_id]
         if len(args) < 3:
@@ -2822,8 +3241,23 @@ class DailyLimitPlugin(star.Star):
             if user_keys:
                 analytics_msg += "\n📊 使用分布：\n"
 
-                # 统计不同使用频次的用户数量
-                usage_levels = {"低(1-5次)": 0, "中(6-20次)": 0, "高(21+次)": 0}
+                # 活跃度分桶阈值(可配: limits.stats_distribution_thresholds)
+                thresholds = self.config.get("limits", {}).get(
+                    "stats_distribution_thresholds", [5, 20]
+                )
+                if not isinstance(thresholds, list) or len(thresholds) < 1:
+                    thresholds = [5, 20]
+                # 阈值从小到大排序,生成 N+1 档
+                sorted_th = sorted(int(x) for x in thresholds)
+
+                def _label(idx: int) -> str:
+                    if idx == 0:
+                        return f"低(1-{sorted_th[0]}次)"
+                    if idx == len(sorted_th):
+                        return f"高({sorted_th[-1] + 1}+次)"
+                    return f"中({sorted_th[idx - 1] + 1}-{sorted_th[idx]}次)"
+
+                usage_levels = {_label(i): 0 for i in range(len(sorted_th) + 1)}
 
                 for key in user_keys:
                     usage = self._safe_execute(
@@ -2834,12 +3268,14 @@ class DailyLimitPlugin(star.Star):
                     )
                     if usage:
                         usage_count = int(usage)
-                        if usage_count <= 5:
-                            usage_levels["低(1-5次)"] += 1
-                        elif usage_count <= 20:
-                            usage_levels["中(6-20次)"] += 1
-                        else:
-                            usage_levels["高(21+次)"] += 1
+                        # 落入第几个桶
+                        bucket = 0
+                        for th in sorted_th:
+                            if usage_count > th:
+                                bucket += 1
+                            else:
+                                break
+                        usage_levels[_label(bucket)] += 1
 
                 for level, count in usage_levels.items():
                     if count > 0:
@@ -2963,15 +3399,19 @@ class DailyLimitPlugin(star.Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @limit_command_group.command("top")
-    async def limit_top(self, event: AstrMessageEvent, count: int = 10):
+    async def limit_top(self, event: AstrMessageEvent, count: int = 0):
         """显示使用次数排行榜"""
         if not self.redis:
             await event.send(MessageChain().message("❌ Redis未连接，无法获取排行榜"))
             return
 
-        # 验证参数
-        if count < 1 or count > 20:
-            await event.send(MessageChain().message("❌ 排行榜数量应在1-20之间"))
+        # 排行榜数量边界(可配)
+        if count == 0:
+            count = int(self.config.get("limits", {}).get("top_default_count", 10))
+        max_count = int(self.config.get("limits", {}).get("top_max_count", 20))
+        max_count = max(1, min(100, max_count))
+        if count < 1 or count > max_count:
+            await event.send(MessageChain().message(f"❌ 排行榜数量应在1-{max_count}之间"))
             return
 
         try:
@@ -3479,7 +3919,7 @@ class DailyLimitPlugin(star.Star):
             await self.version_checker.check_version_update()
 
             # 检查是否有新版本
-            current_version = self.config.get("version", "v2.8.9")
+            current_version = self.config.get("version", _META_VERSION)
             if self.version_checker.last_checked_version:
                 if (
                     self.version_checker._compare_versions(self.version_checker.last_checked_version, current_version)
@@ -3497,7 +3937,7 @@ class DailyLimitPlugin(star.Star):
                             f"📦 当前版本：{current_version}\n"
                             f"🆕 最新版本：{self.version_checker.last_checked_version}\n"
                             f"📝 更新内容：{update_content}\n"
-                            f"🔗 下载地址：https://github.com/left666/astrbot_plugin_daily_limit"
+                            f"🔗 下载地址:{_META_REPO}"
                             f"\nCiallo～(∠・ω< )⌒★"
                         )
                     )
@@ -3526,14 +3966,13 @@ class DailyLimitPlugin(star.Star):
     async def limit_version(self, event: AstrMessageEvent):
         """查看当前插件版本信息（仅管理员）"""
         try:
-            current_version = self.config.get("version", "v2.8.9")
+            current_version = self.config.get("version", _META_VERSION)
 
             # 构建版本信息消息
             version_msg = "📦 日调用限制插件版本信息\n"
             version_msg += "══════════════\n\n"
             version_msg += f"• 当前版本：{current_version}\n"
-            version_msg += "• 作者：left666\n"
-            version_msg += "• 改进：Sakura520222\n\n"
+            version_msg += f"• 作者：{_META_AUTHOR}\n\n"
 
             # 添加版本检查状态
             if not self.config["version_check"].get("enabled", True):
@@ -3577,11 +4016,11 @@ class DailyLimitPlugin(star.Star):
 ░░░░░░░░░░   ░░░░░   ░░░░░ ░░░░░ ░░░░░░░░░░░    ░░░░░       ░░░░░░░░░░░ ░░░░░ ░░░░░     ░░░░░ ░░░░░    ░░░░░    
                                                                                                                 
                                                                                                                                                                                                       
-                                       每日调用限制插件 v2.8.9                       
-                                  作者: left666 & Sakura520222                  
+                                       每日调用限制Plus {}                       
+                                  作者: {}                  
     """
 
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         """AstrBot初始化完成时触发"""
-        self._log_info("{}", self.ASCII_ART)
+        self._log_info("{}", self.ASCII_ART.format(_META_VERSION, _META_AUTHOR))

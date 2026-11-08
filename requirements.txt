@@ -1,4 +1,8 @@
-redis>=4.5.0
+# Plus 版: Redis 是可选依赖,主流程走 JSON 文件存储
+# 启用 Redis 需要先 pip install redis
+# redis>=4.5.0
 flask>=2.3.0
 flask-cors>=4.0.0
 aiohttp>=3.8.0
+# Plus 版: 读取 metadata.yaml 所需(元信息统一在 yaml 中维护)
+pyyaml>=6.0

@@ -6,9 +6,12 @@
 - 检查消息是否应忽略
 - 时间段限制处理
 - 群组模式管理
+
+Plus 版: 时间段限流支持 in-memory fallback,无需 Redis
 """
 
 import datetime
+import threading
 
 
 class Limiter:
@@ -25,6 +28,9 @@ class Limiter:
         self.logger = plugin.logger
         self.config = plugin.config
         self.config_mgr = plugin.config_mgr  # 引用配置管理器
+        # Plus 版: in-memory fallback(无 Redis 时使用,重启会清空)
+        self._inmem_tp_usage: dict[str, int] = {}
+        self._inmem_tp_lock = threading.Lock()
 
     def should_skip_message(self, message_str):
         """检查消息是否应该忽略处理"""
@@ -108,38 +114,59 @@ class Limiter:
         date_str = self._get_reset_period_date()
         return f"astrbot:time_period_limit:{date_str}:{time_period_id}:{group_id}:{user_id}"
 
-    def get_time_period_usage(self, user_id, group_id=None):
-        """获取用户在时间段内的使用次数"""
-        redis_client = self.plugin.redis_client
-        if not redis_client or not redis_client.redis:
-            return 0
+    def _redis_or_none(self):
+        """获取 Redis 客户端(已启用且可用)"""
+        client = getattr(self.plugin, "redis_client", None)
+        if client is None:
+            return None
+        if not client.is_available():
+            return None
+        return client.redis
 
+    def get_time_period_usage(self, user_id, group_id=None):
+        """获取用户在时间段内的使用次数
+
+        优先使用 Redis;Redis 不可用时回退到 in-memory dict
+        """
         key = self.get_time_period_usage_key(user_id, group_id)
         if key is None:
             return 0
 
-        usage = redis_client.redis.get(key)
-        return int(usage) if usage else 0
+        r = self._redis_or_none()
+        if r is not None:
+            try:
+                usage = r.get(key)
+                return int(usage) if usage else 0
+            except Exception as e:
+                self.logger.log_warning("Redis get 失败,回退 in-memory: {}", str(e))
+
+        # Plus 版: in-memory fallback
+        with self._inmem_tp_lock:
+            return self._inmem_tp_usage.get(key, 0)
 
     def increment_time_period_usage(self, user_id, group_id=None):
-        """增加用户在时间段内的使用次数"""
-        redis_client = self.plugin.redis_client
-        if not redis_client or not redis_client.redis:
-            return False
+        """增加用户在时间段内的使用次数
 
+        优先使用 Redis;Redis 不可用时回退到 in-memory dict
+        """
         key = self.get_time_period_usage_key(user_id, group_id)
         if key is None:
             return False
 
-        # 增加计数并设置过期时间
-        pipe = redis_client.redis.pipeline()
-        pipe.incr(key)
+        r = self._redis_or_none()
+        if r is not None:
+            try:
+                pipe = r.pipeline()
+                pipe.incr(key)
+                pipe.expire(key, self._get_seconds_until_tomorrow())
+                pipe.execute()
+                return True
+            except Exception as e:
+                self.logger.log_warning("Redis incr 失败,回退 in-memory: {}", str(e))
 
-        # 设置过期时间到下次重置时间
-        seconds_until_tomorrow = self._get_seconds_until_tomorrow()
-        pipe.expire(key, seconds_until_tomorrow)
-
-        pipe.execute()
+        # Plus 版: in-memory fallback
+        with self._inmem_tp_lock:
+            self._inmem_tp_usage[key] = self._inmem_tp_usage.get(key, 0) + 1
         return True
 
     def get_user_limit(self, user_id, group_id=None):

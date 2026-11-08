@@ -1,357 +1,613 @@
 {
-    "redis": {
-        "description": "Redis配置",
-        "type": "object",
-        "items": {
-            "host": {
-                "description": "Redis主机地址",
-                "type": "string",
-                "default": "localhost"
-            },
-            "port": {
-                "description": "Redis端口号",
-                "type": "int",
-                "default": 6379
-            },
-            "db": {
-                "description": "Redis数据库索引",
-                "type": "int",
-                "default": 0
-            },
-            "password": {
-                "description": "Redis访问密码",
-                "type": "string",
-                "default": ""
-            }
-        }
-    },
-    "limits": {
-        "description": "限制配置",
-        "type": "object",
-        "items": {
-            "default_daily_limit": {
-                "description": "默认每日限制次数",
-                "type": "int",
-                "default": 20,
-                "group": "基础设置"
-            },
-            "exempt_users": {
-                "description": "豁免用户ID列表",
-                "type": "list",
-                "default": [],
-                "group": "用户设置",
-                "hint": "这些用户不受每日限制次数限制"
-            },
-            "priority_users": {
-                "description": "优先级用户ID列表",
-                "type": "list",
-                "default": [],
-                "group": "用户设置",
-                "hint": "优先级用户在任何群聊中只受特定限制，不参与特定群聊限制"
-            },
-            "group_limits": {
-                "description": "特定群组限制",
-                "type": "text",
-                "default": "",
-                "group": "群组设置",
-                "hint": "格式为：群组ID:每日限制次数，一行一个（使用指令/sid查看ID）\n示例：\n123456:50\n789012:30\n345678:100"
-            },
-            "group_mode_settings": {
-                "description": "群组模式配置",
-                "type": "text",
-                "default": "",
-                "group": "群组设置",
-                "hint": "格式为：群组ID:模式(shared或individual)，一行一个\n示例：\n123456:shared\n789012:individual\n345678:shared"
-            },
-            "user_limits": {
-                "description": "特定用户限制",
-                "type": "text",
-                "default": "",
-                "group": "用户设置",
-                "hint": "格式为：用户ID:每日限制次数，一行一个\n示例：\n123456789:100\n987654321:50\n555666777:200"
-            },
-            "time_period_limits": {
-                "description": "时间段限制配置",
-                "type": "text",
-                "default": "",
-                "group": "时间段设置",
-                "hint": "格式为：开始时间-结束时间:限制次数:是否启用(true/false)，一行一个\n示例：\n09:00-12:00:10:true\n14:00-18:00:20:false\n20:00-23:00:15:true"
-            },
-            "skip_patterns": {
-                "description": "忽略处理的模式配置",
-                "type": "list",
-                "default": ["#", "*"],
-                "group": "基础设置",
-                "hint": "消息以这些格式开头时，将忽略它们（不会回复，不消耗次数）",
-                "items": {
-                    "type": "string"
-                }
-            },
-            "daily_reset_time": {
-                "description": "每日重置时间",
-                "type": "string",
-                "default": "00:00",
-                "group": "基础设置",
-                "hint": "设置每日重置时间，格式为HH:MM（24小时制），例如：00:00（午夜）、06:00（早上6点）、12:00（中午12点）。支持通过/limit resettime命令动态管理"
-            },
-            "show_remaining_count": {
-                "description": "是否显示剩余次数",
-                "type": "bool",
-                "default": true,
-                "group": "消息设置",
-                "hint": "在回复消息中显示用户剩余的使用次数"
-            },
-            "show_progress_bar": {
-                "description": "是否显示进度条",
-                "type": "bool",
-                "default": true,
-                "group": "消息设置",
-                "hint": "在使用状态查询中显示进度条"
-            },
-            "usage_tip": {
-                "description": "使用提示文本",
-                "type": "string",
-                "default": "每日限制次数会在重置时间自动恢复",
-                "group": "消息设置",
-                "hint": "在使用状态查询中显示的自定义提示文本"
-            },
-            "detailed_stats": {
-                "description": "是否记录详细统计数据",
-                "type": "bool",
-                "default": true,
-                "group": "统计设置",
-                "hint": "记录更详细的使用统计数据，包括小时级别的使用情况"
-            },
-            "stats_retention_days": {
-                "description": "统计数据保留天数",
-                "type": "int",
-                "default": 30,
-                "group": "统计设置",
-                "hint": "统计数据保留的天数，超过天数的数据将被自动清理"
-            },
-            "allow_normal_users_check_limit": {
-                "description": "允许普通用户查询使用限制",
-                "type": "bool",
-                "default": true,
-                "group": "管理设置",
-                "hint": "允许普通用户使用/limit_status命令查询自己的使用限制"
-            },
-            "redis_connection_pool_size": {
-                "description": "Redis连接池大小",
-                "type": "int",
-                "default": 10,
-                "group": "性能设置",
-                "hint": "Redis连接池的最大连接数，用于优化性能"
-            },
-            "cache_expire_time": {
-                "description": "缓存过期时间（秒）",
-                "type": "int",
-                "default": 3600,
-                "group": "性能设置",
-                "hint": "一些临时缓存数据的过期时间，单位为秒"
-            },
-            "custom_messages": {
-                "description": "自定义提醒消息配置",
-                "type": "object",
-                "group": "消息设置",
-                "items": {
-                    "zero_usage_reminder_enabled": {
-                        "description": "是否启用0使用次数提醒冷却",
-                        "type": "bool",
-                        "default": true,
-                        "hint": "启用后，用户多次触发使用次数为0时不会重复发送提醒，直到冷却时间结束"
-                    },
-                    "zero_usage_reminder_cooldown": {
-                        "description": "0使用次数提醒冷却时间（秒）",
-                        "type": "int",
-                        "default": 300,
-                        "hint": "同一用户多次触发使用次数为0时，在此时间内不会重复发送提醒"
-                    },
-                    "zero_usage_message": {
-                        "description": "使用次数为0时的提醒消息",
-                        "type": "text",
-                        "default": "您的AI访问次数已达上限（{usage}/{limit}），请稍后再试或联系管理员提升限额。",
-                        "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{user_name}（用户名）、{group_name}（群组名）"
-                    },
-                    "zero_usage_group_shared_message": {
-                        "description": "群组共享模式下使用次数为0时的提醒消息",
-                        "type": "text",
-                        "default": "本群组AI访问次数已达上限（{usage}/{limit}），请稍后再试或联系管理员提升限额。",
-                        "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{user_name}（用户名）、{group_name}（群组名）"
-                    },
-                    "zero_usage_group_individual_message": {
-                        "description": "群组独立模式下使用次数为0时的提醒消息",
-                        "type": "text",
-                        "default": "您在本群组的AI访问次数已达上限（{usage}/{limit}），请稍后再试或联系管理员提升限额。",
-                        "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{user_name}（用户名）、{group_name}（群组名）"
-                    },
-                    "limit_status_private_message": {
-                        "description": "私聊中/limit_status命令返回的消息模板",
-                        "type": "text",
-                        "default": "👤 个人使用状态\n📊 今日已使用：{usage}/{limit} 次\n📈 {progress_bar}\n🎯 剩余次数：{remaining} 次\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}",
-                        "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{progress_bar}（进度条）、{usage_tip}（使用提示）、{reset_time}（重置时间）"
-                    },
-                    "limit_status_group_shared_message": {
-                        "description": "群组共享模式中/limit_status命令返回的消息模板",
-                        "type": "text",
-                        "default": "👥 群组共享模式 - {limit_type}\n📊 今日已使用：{usage}/{limit} 次\n📈 {progress_bar}\n🎯 剩余次数：{remaining} 次\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}",
-                        "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{progress_bar}（进度条）、{usage_tip}（使用提示）、{reset_time}（重置时间）、{limit_type}（限制类型）"
-                    },
-                    "limit_status_group_individual_message": {
-                        "description": "群组独立模式中/limit_status命令返回的消息模板",
-                        "type": "text",
-                        "default": "👤 个人独立模式 - {limit_type}\n📊 今日已使用：{usage}/{limit} 次\n📈 {progress_bar}\n🎯 剩余次数：{remaining} 次\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}",
-                        "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{progress_bar}（进度条）、{usage_tip}（使用提示）、{reset_time}（重置时间）、{limit_type}（限制类型）"
-                    },
-                    "limit_status_exempt_message": {
-                        "description": "豁免用户/limit_status命令返回的消息模板",
-                        "type": "text",
-                        "default": "🎉 您{group_context}没有调用次数限制（豁免用户）",
-                        "hint": "支持变量：{group_context}（群组上下文，如'在本群组'或空字符串）"
-                    },
-                    "limit_status_time_period_message": {
-                        "description": "/limit_status命令中时间段限制信息的消息模板",
-                        "type": "text",
-                        "default": "⏰ 当前处于时间段限制：{start_time}-{end_time}\n📋 时间段限制：{time_period_limit} 次\n📊 时间段内已使用：{time_period_usage}/{time_period_limit} 次\n📈 {time_period_progress}\n🎯 时间段内剩余：{time_period_remaining} 次",
-                        "hint": "支持变量：{start_time}（开始时间）、{end_time}（结束时间）、{time_period_limit}（时间段限制）、{time_period_usage}（时间段内已使用）、{time_period_remaining}（时间段内剩余）、{time_period_progress}（时间段进度条）"
-                    }
-                }
-            }
-        }
-    },
-    "web_server": {
-        "description": "Web管理界面配置",
-        "type": "object",
-        "items": {
-            "host": {
-                "description": "Web服务器监听地址",
-                "type": "string",
-                "default": "127.0.0.1"
-            },
-            "port": {
-                "description": "Web服务器监听端口",
-                "type": "int",
-                "default": 10245
-            },
-            "debug": {
-                "description": "是否启用调试模式",
-                "type": "bool",
-                "default": false
-            },
-            "domain": {
-                "description": "自定义域名（用于生成访问链接）",
-                "type": "string",
-                "default": ""
-            },
-            "password": {
-                "description": "Web管理界面访问密码",
-                "type": "string",
-                "default": "limit",
-                "hint": "留空表示无需密码访问，建议生产环境设置强密码"
-            }
-        }
-    },
-    "version_check": {
-        "description": "版本检查配置",
-        "type": "object",
-        "items": {
-            "enabled": {
-                "description": "是否启用版本检查功能",
-                "type": "bool",
-                "default": true
-            },
-            "check_interval": {
-                "description": "检查间隔（分钟）",
-                "type": "int",
-                "default": 60,
-                "hint": "每隔多少分钟检查一次新版本"
-            },
-            "admin_users": {
-                "description": "管理员用户ID列表（当前仅支持QQ）",
-                "type": "list",
-                "default": [],
-                "hint": "检测到新版本时通知的管理员用户ID，使用指令/sid查看ID"
-            },
-            "notification_message": {
-                "description": "新版本通知消息模板",
-                "type": "text",
-                "default": "AstrBot-每日限制插件 DailyLimit\n\n🚀 检测到新版本可用！\n📦 当前版本：{current_version}\n🆕 最新版本：{new_version}\n📝 更新内容：{update_content}\n🔗 下载地址：{download_url}\n\nCiallo～(∠・ω< )⌒★",
-                "hint": "支持变量：{current_version}（当前版本）、{new_version}（最新版本）、{update_content}（更新内容）、{download_url}（下载地址）"
-            }
-        }
-    },
-    "security": {
-        "description": "安全增强配置",
-        "type": "object",
-        "items": {
-            "anti_abuse_enabled": {
-                "description": "是否启用防刷机制",
-                "type": "bool",
-                "default": false,
-                "group": "防刷设置"
-            },
-            "rapid_request_threshold": {
-                "description": "快速请求阈值（次/秒）",
-                "type": "int",
-                "default": 10,
-                "group": "防刷设置",
-                "hint": "10秒内超过此数量的请求将被视为异常行为"
-            },
-            "rapid_request_window": {
-                "description": "快速请求检测时间窗口（秒）",
-                "type": "int",
-                "default": 10,
-                "group": "防刷设置",
-                "hint": "快速请求检测的时间窗口大小"
-            },
-            "consecutive_request_threshold": {
-                "description": "连续请求阈值（次）",
-                "type": "int",
-                "default": 5,
-                "group": "防刷设置",
-                "hint": "连续请求超过此数量将被视为异常行为"
-            },
-            "consecutive_request_window": {
-                "description": "连续请求检测时间窗口（秒）",
-                "type": "int",
-                "default": 30,
-                "group": "防刷设置",
-                "hint": "连续请求检测的时间窗口大小"
-            },
-            "auto_block_duration": {
-                "description": "自动限制时长（秒）",
-                "type": "int",
-                "default": 300,
-                "group": "限制设置",
-                "hint": "检测到异常行为后自动限制的时长"
-            },
-            "admin_notification_enabled": {
-                "description": "检测到异常行为时通知管理员",
-                "type": "bool",
-                "default": true,
-                "group": "通知设置"
-            },
-            "admin_users": {
-                "description": "管理员用户ID列表（当前仅支持QQ）",
-                "type": "list",
-                "default": [],
-                "group": "通知设置",
-                "hint": "检测到异常行为时通知的管理员用户ID，使用指令/sid查看ID"
-            },
-            "block_notification_template": {
-                "description": "用户限制通知消息模板",
-                "type": "text",
-                "default": "检测到异常使用行为，您已被临时限制使用{auto_block_duration}秒",
-                "group": "通知设置",
-                "hint": "支持变量：{auto_block_duration}（限制时长）"
-            },
-            "notification_cooldown": {
-                "description": "通知冷却时间（秒）",
-                "type": "int",
-                "default": 300,
-                "group": "通知设置",
-                "hint": "同一用户重复触发限制时，在此时间内不会重复发送通知，避免骚扰"
-            }
-        }
+  "redis": {
+    "description": "Redis配置(可选,本插件默认走 JSON 存储,无需 Redis)",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "是否启用 Redis(关闭时使用 JSON 文件存储,插件可正常运转)",
+        "type": "bool",
+        "default": false,
+        "group": "基础",
+        "hint": "Plus 版默认关闭,主流程不需要 Redis;仅当你想做使用记录/统计分析时才开启"
+      },
+      "host": {
+        "description": "Redis主机地址(仅在 enabled=true 时使用)",
+        "type": "string",
+        "default": "localhost"
+      },
+      "port": {
+        "description": "Redis端口号(仅在 enabled=true 时使用)",
+        "type": "int",
+        "default": 6379
+      },
+      "db": {
+        "description": "Redis数据库索引",
+        "type": "int",
+        "default": 0
+      },
+      "password": {
+        "description": "Redis访问密码",
+        "type": "string",
+        "default": ""
+      },
+      "connection_pool_size": {
+        "description": "Redis 连接池大小",
+        "type": "int",
+        "default": 10
+      },
+      "connect_timeout": {
+        "description": "Redis 连接超时(秒)",
+        "type": "int",
+        "default": 3
+      },
+      "socket_timeout": {
+        "description": "Redis socket 超时(秒)",
+        "type": "int",
+        "default": 3
+      }
     }
+  },
+  "limits": {
+    "description": "限制配置",
+    "type": "object",
+    "items": {
+      "default_daily_limit": {
+        "description": "默认每日限制次数",
+        "type": "int",
+        "default": 20,
+        "group": "基础设置"
+      },
+      "exempt_users": {
+        "description": "豁免用户ID列表",
+        "type": "list",
+        "default": [],
+        "group": "用户设置",
+        "hint": "这些用户不受每日限制次数限制"
+      },
+      "priority_users": {
+        "description": "优先级用户ID列表",
+        "type": "list",
+        "default": [],
+        "group": "用户设置",
+        "hint": "优先级用户在任何群聊中只受特定限制，不参与特定群聊限制"
+      },
+      "group_limits": {
+        "description": "特定群组限制",
+        "type": "text",
+        "default": "",
+        "group": "群组设置",
+        "hint": "格式为：群组ID:每日限制次数，一行一个（使用指令/sid查看ID）\n示例：\n123456:50\n789012:30\n345678:100"
+      },
+      "group_mode_settings": {
+        "description": "群组模式配置",
+        "type": "text",
+        "default": "",
+        "group": "群组设置",
+        "hint": "格式为：群组ID:模式(shared或individual)，一行一个\n示例：\n123456:shared\n789012:individual\n345678:shared"
+      },
+      "user_limits": {
+        "description": "特定用户限制",
+        "type": "text",
+        "default": "",
+        "group": "用户设置",
+        "hint": "格式为：用户ID:每日限制次数，一行一个\n示例：\n123456789:100\n987654321:50\n555666777:200"
+      },
+      "time_period_limits": {
+        "description": "时间段限制配置",
+        "type": "text",
+        "default": "",
+        "group": "时间段设置",
+        "hint": "格式为：开始时间-结束时间:限制次数:是否启用(true/false)，一行一个\n示例：\n09:00-12:00:10:true\n14:00-18:00:20:false\n20:00-23:00:15:true"
+      },
+      "skip_patterns": {
+        "description": "忽略处理的模式配置",
+        "type": "list",
+        "default": ["#", "*"],
+        "group": "基础设置",
+        "hint": "消息以这些格式开头时，将忽略它们（不会回复，不消耗次数）",
+        "items": {
+          "type": "string"
+        }
+      },
+      "daily_reset_time": {
+        "description": "每日重置时间",
+        "type": "string",
+        "default": "00:00",
+        "group": "基础设置",
+        "hint": "设置每日重置时间，格式为HH:MM（24小时制），例如：00:00（午夜）、06:00（早上6点）、12:00（中午12点）。支持通过/limit resettime命令动态管理"
+      },
+      "show_remaining_count": {
+        "description": "是否显示剩余次数",
+        "type": "bool",
+        "default": true,
+        "group": "消息设置",
+        "hint": "在回复消息中显示用户剩余的使用次数"
+      },
+      "show_progress_bar": {
+        "description": "是否显示进度条",
+        "type": "bool",
+        "default": true,
+        "group": "消息设置",
+        "hint": "在使用状态查询中显示进度条"
+      },
+      "bar_length": {
+        "description": "进度条字符数(/my 等位置展示用)",
+        "type": "int",
+        "default": 10,
+        "group": "消息设置",
+        "hint": "默认 10 个字符宽,可调整为 5-50"
+      },
+      "low_remaining_thresholds": {
+        "description": "剩余次数提醒阈值",
+        "type": "list",
+        "default": [1, 3, 5],
+        "group": "消息设置",
+        "hint": "当用户剩余次数命中这些值时自动发送提醒,可按需增减"
+      },
+      "show_token_usage": {
+        "description": "在 /my 状态页展示 token 消耗",
+        "type": "bool",
+        "default": true,
+        "group": "消息设置",
+        "hint": "关闭后 /my 不再展示今日/本月 token"
+      },
+      "top_default_count": {
+        "description": "排行榜默认显示数量",
+        "type": "int",
+        "default": 10,
+        "group": "统计设置",
+        "hint": "/limit top 不带参数时显示的人数"
+      },
+      "top_max_count": {
+        "description": "排行榜最大显示数量",
+        "type": "int",
+        "default": 20,
+        "group": "统计设置",
+        "hint": "/limit top 可查询的最大人数,防止一次拉太多"
+      },
+      "stats_distribution_thresholds": {
+        "description": "用户活跃度分桶阈值(用于统计概览)",
+        "type": "list",
+        "default": [5, 20],
+        "group": "统计设置",
+        "hint": "把用户按使用次数分桶,例 [5,20] 意为 1-5 / 6-20 / 21+ 三档"
+      },
+      "usage_tip": {
+        "description": "使用提示文本",
+        "type": "string",
+        "default": "每日限制次数会在重置时间自动恢复",
+        "group": "消息设置",
+        "hint": "在使用状态查询中显示的自定义提示文本"
+      },
+      "detailed_stats": {
+        "description": "是否记录详细统计数据",
+        "type": "bool",
+        "default": true,
+        "group": "统计设置",
+        "hint": "记录更详细的使用统计数据，包括小时级别的使用情况"
+      },
+      "stats_retention_days": {
+        "description": "统计数据保留天数",
+        "type": "int",
+        "default": 30,
+        "group": "统计设置",
+        "hint": "统计数据保留的天数，超过天数的数据将被自动清理"
+      },
+      "allow_normal_users_check_limit": {
+        "description": "允许普通用户查询使用限制",
+        "type": "bool",
+        "default": true,
+        "group": "管理设置",
+        "hint": "允许普通用户使用/limit_status命令查询自己的使用限制"
+      },
+      "redis_connection_pool_size": {
+        "description": "Redis连接池大小",
+        "type": "int",
+        "default": 10,
+        "group": "性能设置",
+        "hint": "Redis连接池的最大连接数，用于优化性能"
+      },
+      "cache_expire_time": {
+        "description": "缓存过期时间（秒）",
+        "type": "int",
+        "default": 3600,
+        "group": "性能设置",
+        "hint": "一些临时缓存数据的过期时间，单位为秒"
+      },
+      "custom_messages": {
+        "description": "自定义提醒消息配置",
+        "type": "object",
+        "group": "消息设置",
+        "items": {
+          "zero_usage_reminder_enabled": {
+            "description": "是否启用0使用次数提醒冷却",
+            "type": "bool",
+            "default": true,
+            "hint": "启用后，用户多次触发使用次数为0时不会重复发送提醒，直到冷却时间结束"
+          },
+          "zero_usage_reminder_cooldown": {
+            "description": "0使用次数提醒冷却时间（秒）",
+            "type": "int",
+            "default": 300,
+            "hint": "同一用户多次触发使用次数为0时，在此时间内不会重复发送提醒"
+          },
+          "zero_usage_message": {
+            "description": "使用次数为0时的提醒消息",
+            "type": "text",
+            "default": "您的AI访问次数已达上限（{usage}/{limit}），请稍后再试或联系管理员提升限额。",
+            "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{user_name}（用户名）、{group_name}（群组名）"
+          },
+          "zero_usage_group_shared_message": {
+            "description": "群组共享模式下使用次数为0时的提醒消息",
+            "type": "text",
+            "default": "本群组AI访问次数已达上限（{usage}/{limit}），请稍后再试或联系管理员提升限额。",
+            "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{user_name}（用户名）、{group_name}（群组名）"
+          },
+          "zero_usage_group_individual_message": {
+            "description": "群组独立模式下使用次数为0时的提醒消息",
+            "type": "text",
+            "default": "您在本群组的AI访问次数已达上限（{usage}/{limit}），请稍后再试或联系管理员提升限额。",
+            "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{user_name}（用户名）、{group_name}（群组名）"
+          },
+          "limit_status_private_message": {
+            "description": "私聊中/limit_status命令返回的消息模板",
+            "type": "text",
+            "default": "👤 个人使用状态\n📊 今日已使用：{usage}/{limit} 次\n📈 {progress_bar}\n🎯 剩余次数：{remaining} 次\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}",
+            "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{progress_bar}（进度条）、{usage_tip}（使用提示）、{reset_time}（重置时间）"
+          },
+          "limit_status_group_shared_message": {
+            "description": "群组共享模式中/limit_status命令返回的消息模板",
+            "type": "text",
+            "default": "👥 群组共享模式 - {limit_type}\n📊 今日已使用：{usage}/{limit} 次\n📈 {progress_bar}\n🎯 剩余次数：{remaining} 次\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}",
+            "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{progress_bar}（进度条）、{usage_tip}（使用提示）、{reset_time}（重置时间）、{limit_type}（限制类型）"
+          },
+          "limit_status_group_individual_message": {
+            "description": "群组独立模式中/limit_status命令返回的消息模板",
+            "type": "text",
+            "default": "👤 个人独立模式 - {limit_type}\n📊 今日已使用：{usage}/{limit} 次\n📈 {progress_bar}\n🎯 剩余次数：{remaining} 次\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}",
+            "hint": "支持变量：{usage}（已使用次数）、{limit}（限制次数）、{remaining}（剩余次数）、{progress_bar}（进度条）、{usage_tip}（使用提示）、{reset_time}（重置时间）、{limit_type}（限制类型）"
+          },
+          "limit_status_exempt_message": {
+            "description": "豁免用户/limit_status命令返回的消息模板",
+            "type": "text",
+            "default": "🎉 您{group_context}没有调用次数限制（豁免用户）",
+            "hint": "支持变量：{group_context}（群组上下文，如'在本群组'或空字符串）"
+          },
+          "limit_status_time_period_message": {
+            "description": "/limit_status命令中时间段限制信息的消息模板",
+            "type": "text",
+            "default": "⏰ 当前处于时间段限制：{start_time}-{end_time}\n📋 时间段限制：{time_period_limit} 次\n📊 时间段内已使用：{time_period_usage}/{time_period_limit} 次\n📈 {time_period_progress}\n🎯 时间段内剩余：{time_period_remaining} 次",
+            "hint": "支持变量：{start_time}（开始时间）、{end_time}（结束时间）、{time_period_limit}（时间段限制）、{time_period_usage}（时间段内已使用）、{time_period_remaining}（时间段内剩余）、{time_period_progress}（时间段进度条）"
+          }
+        }
+      }
+    }
+  },
+  "web_server": {
+    "description": "Web管理界面配置",
+    "type": "object",
+    "items": {
+      "host": {
+        "description": "Web服务器监听地址",
+        "type": "string",
+        "default": "127.0.0.1"
+      },
+      "port": {
+        "description": "Web服务器监听端口",
+        "type": "int",
+        "default": 10245
+      },
+      "debug": {
+        "description": "是否启用调试模式",
+        "type": "bool",
+        "default": false
+      },
+      "domain": {
+        "description": "自定义域名（用于生成访问链接）",
+        "type": "string",
+        "default": ""
+      },
+      "password": {
+        "description": "Web管理界面访问密码",
+        "type": "string",
+        "default": "limit",
+        "hint": "留空表示无需密码访问，建议生产环境设置强密码"
+      }
+    }
+  },
+  "version_check": {
+    "description": "版本检查配置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "是否启用版本检查功能",
+        "type": "bool",
+        "default": true
+      },
+      "check_interval": {
+        "description": "检查间隔（分钟）",
+        "type": "int",
+        "default": 60,
+        "hint": "每隔多少分钟检查一次新版本"
+      },
+      "admin_users": {
+        "description": "管理员用户ID列表（当前仅支持QQ）",
+        "type": "list",
+        "default": [],
+        "hint": "检测到新版本时通知的管理员用户ID，使用指令/sid查看ID"
+      },
+      "notification_message": {
+        "description": "新版本通知消息模板",
+        "type": "text",
+        "default": "AstrBot-每日限制插件 DailyLimit\n\n🚀 检测到新版本可用！\n📦 当前版本：{current_version}\n🆕 最新版本：{new_version}\n📝 更新内容：{update_content}\n🔗 下载地址：{download_url}\n\nCiallo～(∠・ω< )⌒★",
+        "hint": "支持变量：{current_version}（当前版本）、{new_version}（最新版本）、{update_content}（更新内容）、{download_url}（下载地址）"
+      }
+    }
+  },
+  "security": {
+    "description": "安全增强配置",
+    "type": "object",
+    "items": {
+      "anti_abuse_enabled": {
+        "description": "是否启用防刷机制",
+        "type": "bool",
+        "default": false,
+        "group": "防刷设置"
+      },
+      "rapid_request_threshold": {
+        "description": "快速请求阈值（次/秒）",
+        "type": "int",
+        "default": 10,
+        "group": "防刷设置",
+        "hint": "10秒内超过此数量的请求将被视为异常行为"
+      },
+      "rapid_request_window": {
+        "description": "快速请求检测时间窗口（秒）",
+        "type": "int",
+        "default": 10,
+        "group": "防刷设置",
+        "hint": "快速请求检测的时间窗口大小"
+      },
+      "consecutive_request_threshold": {
+        "description": "连续请求阈值（次）",
+        "type": "int",
+        "default": 5,
+        "group": "防刷设置",
+        "hint": "连续请求超过此数量将被视为异常行为"
+      },
+      "consecutive_request_window": {
+        "description": "连续请求检测时间窗口（秒）",
+        "type": "int",
+        "default": 30,
+        "group": "防刷设置",
+        "hint": "连续请求检测的时间窗口大小"
+      },
+      "auto_block_duration": {
+        "description": "自动限制时长（秒）",
+        "type": "int",
+        "default": 300,
+        "group": "限制设置",
+        "hint": "检测到异常行为后自动限制的时长"
+      },
+      "admin_notification_enabled": {
+        "description": "检测到异常行为时通知管理员",
+        "type": "bool",
+        "default": true,
+        "group": "通知设置"
+      },
+      "admin_users": {
+        "description": "管理员用户ID列表（当前仅支持QQ）",
+        "type": "list",
+        "default": [],
+        "group": "通知设置",
+        "hint": "检测到异常行为时通知的管理员用户ID，使用指令/sid查看ID"
+      },
+      "block_notification_template": {
+        "description": "用户限制通知消息模板",
+        "type": "text",
+        "default": "检测到异常使用行为，您已被临时限制使用{auto_block_duration}秒",
+        "group": "通知设置",
+        "hint": "支持变量：{auto_block_duration}（限制时长）"
+      },
+      "notification_cooldown": {
+        "description": "通知冷却时间（秒）",
+        "type": "int",
+        "default": 300,
+        "group": "通知设置",
+        "hint": "同一用户重复触发限制时，在此时间内不会重复发送通知，避免骚扰"
+      }
+    }
+  },
+  "sponsor_text": {
+    "description": "/sponsor 命令展示文案(全部可改,占位符自动替换)",
+    "type": "object",
+    "hint": "字段留空则用内置默认文案;支持 {limit}/{price}/{plan_id} 占位符",
+    "items": {
+      "title": {
+        "description": "标题行",
+        "type": "string",
+        "default": "💝 赞助支持,获得更多 AI 调用额度"
+      },
+      "description": {
+        "description": "副标题(可放一句活动说明)",
+        "type": "string",
+        "default": "赞助后立即解锁更高额度,支持月/季付"
+      },
+      "free_tier": {
+        "description": "免费档说明(支持 {limit})",
+        "type": "string",
+        "default": "🌟 免费用户: 每日 {limit} 次"
+      },
+      "monthly_tier": {
+        "description": "月度档说明(支持 {limit} {price})",
+        "type": "string",
+        "default": "📅 月度会员({price}): 每日 {limit} 次"
+      },
+      "quarterly_tier": {
+        "description": "季度档说明(支持 {limit} {price})",
+        "type": "string",
+        "default": "📆 季度会员({price}): 每日 {limit} 次"
+      },
+      "group_tip": {
+        "description": "群白名单提示(可放空)",
+        "type": "string",
+        "default": "⭐ 群白名单用户: 无限次"
+      },
+      "footer": {
+        "description": "底部说明",
+        "type": "string",
+        "default": "💡 付款后回复任意消息自动激活 / 调 /my 手动核验"
+      }
+    }
+  },
+  "vip": {
+    "description": "订阅制 VIP 配置(替代 Redis 存储的每日额度)",
+    "type": "object",
+    "items": {
+      "data_file": {
+        "description": "用户数据 JSON 文件路径",
+        "type": "string",
+        "default": "data/user_data.json",
+        "group": "存储",
+        "hint": "用户额度/会员数据持久化文件,首次启动会自动创建"
+      },
+      "normal_daily_limit": {
+        "description": "普通用户每日调用额度",
+        "type": "int",
+        "default": 25,
+        "group": "额度",
+        "hint": "免费用户每日可调用大模型的次数"
+      },
+      "monthly_daily_limit": {
+        "description": "月度会员每日调用额度",
+        "type": "int",
+        "default": 150,
+        "group": "额度",
+        "hint": "月度赞助用户每日可调用大模型的次数,默认 150 次(与 README 一致)"
+      },
+      "quarterly_daily_limit": {
+        "description": "季度会员每日调用额度",
+        "type": "int",
+        "default": 200,
+        "group": "额度",
+        "hint": "季度赞助用户每日可调用大模型的次数,默认 200 次"
+      },
+      "unlimited_group_ids": {
+        "description": "无限制群组白名单(也叫:豁免群) - 群号列表",
+        "type": "list",
+        "default": [],
+        "group": "额度",
+        "hint": "白名单内的群组所有消息均不限制、不计数、不预检查;手动维护,示例:[123456789, 987654321]"
+      }
+    }
+  },
+  "afdian": {
+    "description": "爱发电赞助对接配置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "是否启用爱发电 Webhook 接收",
+        "type": "bool",
+        "default": true,
+        "group": "基础",
+        "hint": "关闭后爱发电订单将不会自动升级会员"
+      },
+      "sponsor_url": {
+        "description": "爱发电主页链接(展示给用户)",
+        "type": "string",
+        "default": "https://afdian.com/@your_user_id",
+        "group": "展示",
+        "hint": "在 /sponsor 命令中展示给你的用户的爱发电主页地址,格式: https://afdian.com/@你的id"
+      },
+      "monthly_url": {
+        "description": "月度商品 URL(爱发电后台商品详情页 /item/{id} 链接)",
+        "type": "string",
+        "default": "",
+        "group": "套餐链接",
+        "hint": "在爱发电后台→商品列表→月度商品→复制地址栏 URL 填这里。插件会自动转成 /order/create?plan_id=...&product_type=1&sku=...&custom_order_id=qq%3D{user_id} 付款页。SKU 单独配 monthly_sku_id"
+      },
+      "monthly_sku_id": {
+        "description": "月度商品下的 SKU ID(从爱发电后台商品详情 URL 里复制)",
+        "type": "string",
+        "default": "",
+        "group": "套餐链接",
+        "hint": "在爱发电后台→月度商品详情页 URL 里的 sku_id 后那段 32 位字符串。插件会用它预选 SKU 数量 = 1 让用户点开就付款"
+      },
+      "quarterly_url": {
+        "description": "季度商品 URL(爱发电后台商品详情页 /item/{id} 链接)",
+        "type": "string",
+        "default": "",
+        "group": "套餐链接",
+        "hint": "在爱发电后台→商品列表→季度商品→复制地址栏 URL 填这里。插件会自动转成 /order/create?plan_id=...&product_type=1&sku=...&custom_order_id=qq%3D{user_id} 付款页。SKU 单独配 quarterly_sku_id"
+      },
+      "quarterly_sku_id": {
+        "description": "季度商品下的 SKU ID(从爱发电后台商品详情 URL 里复制)",
+        "type": "string",
+        "default": "",
+        "group": "套餐链接",
+        "hint": "在爱发电后台→季度商品详情页 URL 里的 sku_id 后那段 32 位字符串。插件会用它预选 SKU 数量 = 1 让用户点开就付款"
+      },
+      "verify_cache_seconds": {
+        "description": "同一用户主动核验缓存秒数",
+        "type": "int",
+        "default": 300,
+        "group": "核验",
+        "hint": "默认 5 分钟,避免同一用户每次调用都打爱发电 API;设为 0 则每次都查"
+      },
+      "monthly_price": {
+        "description": "月度套餐显示价格(用于 /sponsor 展示)",
+        "type": "string",
+        "default": "¥ 9.9/月",
+        "group": "展示"
+      },
+      "quarterly_price": {
+        "description": "季度套餐显示价格(用于 /sponsor 展示)",
+        "type": "string",
+        "default": "¥ 24.9/季",
+        "group": "展示"
+      },
+      "monthly_plan_id": {
+        "description": "月度套餐 plan_id(用于精确识别)",
+        "type": "string",
+        "default": "",
+        "group": "套餐",
+        "hint": "在爱发电后台复制 plan_id 粘贴到这里,Webhook 会按此识别"
+      },
+      "quarterly_plan_id": {
+        "description": "季度套餐 plan_id(用于精确识别)",
+        "type": "string",
+        "default": "",
+        "group": "套餐",
+        "hint": "在爱发电后台复制 plan_id 粘贴到这里,Webhook 会按此识别"
+      },
+      "webhook_path": {
+        "description": "Webhook 接收路径",
+        "type": "string",
+        "default": "/afdian_webhook",
+        "group": "Webhook",
+        "hint": "在爱发电后台填写的 Webhook URL 路径部分(域名指向你的服务)"
+      },
+      "webhook_token": {
+        "description": "Webhook 自定义 Token(可选,用于二次校验)",
+        "type": "string",
+        "default": "",
+        "group": "Webhook",
+        "hint": "留空则不启用 token 校验,推荐通过反向代理限制来源 IP"
+      },
+      "user_id": {
+        "description": "爱发电开放 API user_id(用于订单补查)",
+        "type": "string",
+        "default": "",
+        "group": "API",
+        "hint": "可选,如需调用爱发电开放 API 查询订单请填写"
+      },
+      "user_token": {
+        "description": "爱发电开放 API user_token(用于订单补查)",
+        "type": "string",
+        "default": "",
+        "group": "API",
+        "hint": "可选,在爱发电后台开放 API 页面获取"
+      }
+    }
+  }
 }

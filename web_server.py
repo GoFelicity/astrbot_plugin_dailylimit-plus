@@ -21,9 +21,16 @@ import threading
 import time
 from typing import Any
 
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
-from flask_cors import CORS
-
+# Plus 版: flask / flask-cors 软依赖,模块加载时统一为 None 占位
+# 实际 import 推迟到 WebServer.__init__ 中,这样 /plugin reload 或 pip install 后能重新检测
+Flask = None
+jsonify = None
+redirect = None
+render_template = None
+request = None
+session = None
+url_for = None
+CORS = None
 
 class TrendDataStorage:
     """
@@ -336,6 +343,25 @@ class WebServer:
     """
 
     def __init__(self, daily_limit_plugin, host="127.0.0.1", port=10245, domain=""):
+        # Plus 版: flask / flask-cors 运行时检测(每次实例化都重新尝试 import)
+        # 这样 /plugin reload 之后(或 pip install flask 之后)能立即识别已安装的 flask
+        global Flask, jsonify, redirect, render_template, request, session, url_for, CORS
+        if Flask is None:
+            try:
+                from flask import (
+                    Flask as _Flask, jsonify, redirect, render_template,
+                    request, session, url_for,
+                )
+                from flask_cors import CORS as _CORS
+                Flask = _Flask
+                CORS = _CORS
+            except ImportError as e:
+                raise ImportError(
+                    "Web 管理界面不可用:未安装 flask / flask-cors,"
+                    "请在 AstrBot 环境中执行: pip install flask flask-cors;"
+                    "插件其它功能(LLM 限额/订阅/爱发电)不受影响"
+                ) from e
+
         self.plugin = daily_limit_plugin
         self.host = host
         self.original_port = port  # 保存原始端口配置
@@ -639,12 +665,13 @@ class WebServer:
 
         从Redis中获取活跃用户数、活跃群组数和总请求数等关键统计指标，
         包括平均请求数、峰值请求数、峰值小时等扩展指标。
+        Redis 不可用时回退到 JSON 存储。
 
         返回：
             dict: 包含统计信息的字典
         """
         if not self.plugin.redis:
-            return {}
+            return self._get_usage_stats_fallback()
 
         # 使用与主插件相同的日期计算逻辑
         today = self.plugin._get_reset_period_date()
@@ -662,6 +689,29 @@ class WebServer:
         # 保存每日统计数据到本地存储
         self._save_daily_stats(stats)
 
+        return stats
+
+    def _get_usage_stats_fallback(self):
+        """Redis 不可用时从 JSON 存储获取统计"""
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        stats = self._initialize_stats_dict(today)
+        store = getattr(self.plugin, "json_store", None)
+        if store is not None:
+            users = store.all_users()
+            active = 0
+            total = 0
+            for uid, info in users.items():
+                daily = int(info.get("daily_limit", 0) or 0)
+                remain = int(info.get("remaining", 0) or 0)
+                used = max(0, daily - remain)
+                if used > 0 or daily > 0:
+                    active += 1
+                total += used
+            stats["active_users"] = active
+            stats["total_requests"] = total
+            stats["total_users"] = len(users)
+            if active > 0:
+                stats["avg_requests_per_user"] = round(total / active, 2)
         return stats
 
     def _update_active_users_stats(self, stats, today):
@@ -789,20 +839,63 @@ class WebServer:
     def _get_config_data(self):
         """获取配置数据"""
         config = self.plugin.config
+        limits = config.get("limits", {})
 
         return {
             "default_daily_limit": config["limits"]["default_daily_limit"],
             "exempt_users": config["limits"]["exempt_users"],
             "priority_users": config["limits"].get(
                 "priority_users", []
-            ),  # 添加优先级用户字段
+            ),
             "group_limits": config["limits"]["group_limits"],
             "user_limits": config["limits"]["user_limits"],
             "group_mode_settings": config["limits"]["group_mode_settings"],
             "time_period_limits": config["limits"]["time_period_limits"],
             "skip_patterns": config["limits"]["skip_patterns"],
             "custom_messages": config["limits"].get("custom_messages", {}),
-            "redis_config": config["redis"],
+            "redis_config": config.get("redis", {}),
+            # Plus 版: 可参数化的可调项(原本是写死的)
+            "bar_length": limits.get("bar_length", 10),
+            "low_remaining_thresholds": limits.get("low_remaining_thresholds", [1, 3, 5]),
+            "top_default_count": limits.get("top_default_count", 10),
+            "top_max_count": limits.get("top_max_count", 20),
+            "stats_distribution_thresholds": limits.get("stats_distribution_thresholds", [5, 20]),
+            "show_token_usage": limits.get("show_token_usage", True),
+            # Plus 版: 订阅制 / 群白名单
+            "vip": {
+                "data_file": config.get("vip", {}).get("data_file", "data/user_data.json"),
+                "normal_daily_limit": config.get("vip", {}).get("normal_daily_limit", 25),
+                "monthly_daily_limit": config.get("vip", {}).get("monthly_daily_limit", 150),
+                "quarterly_daily_limit": config.get("vip", {}).get("quarterly_daily_limit", 200),
+                "unlimited_group_ids": config.get("vip", {}).get("unlimited_group_ids", []),
+            },
+            # Plus 版: /sponsor 文案(可改)
+            "sponsor_text": {
+                "title": config.get("sponsor_text", {}).get("title", ""),
+                "description": config.get("sponsor_text", {}).get("description", ""),
+                "free_tier": config.get("sponsor_text", {}).get("free_tier", ""),
+                "monthly_tier": config.get("sponsor_text", {}).get("monthly_tier", ""),
+                "quarterly_tier": config.get("sponsor_text", {}).get("quarterly_tier", ""),
+                "group_tip": config.get("sponsor_text", {}).get("group_tip", ""),
+                "footer": config.get("sponsor_text", {}).get("footer", ""),
+            },
+            # Plus 版: 爱发电配置
+            "afdian": {
+                "enabled": config.get("afdian", {}).get("enabled", True),
+                "sponsor_url": config.get("afdian", {}).get("sponsor_url", ""),
+                "monthly_price": config.get("afdian", {}).get("monthly_price", "¥ 9.9/月"),
+                "quarterly_price": config.get("afdian", {}).get("quarterly_price", "¥ 24.9/季"),
+                "monthly_plan_id": config.get("afdian", {}).get("monthly_plan_id", ""),
+                "quarterly_plan_id": config.get("afdian", {}).get("quarterly_plan_id", ""),
+                "webhook_path": config.get("afdian", {}).get("webhook_path", "/afdian_webhook"),
+                "webhook_token": config.get("afdian", {}).get("webhook_token", ""),
+                "user_id": config.get("afdian", {}).get("user_id", ""),
+                "user_token": config.get("afdian", {}).get("user_token", ""),
+                # Plus 版: 主动核验模式用
+                "monthly_url": config.get("afdian", {}).get("monthly_url", ""),
+                "quarterly_url": config.get("afdian", {}).get("quarterly_url", ""),
+                "verify_cache_seconds": config.get("afdian", {}).get("verify_cache_seconds", 300),
+            },
         }
 
     def _validate_config_data(self, config_data):
@@ -913,28 +1006,142 @@ class WebServer:
         """
         更新Redis配置
 
-        参数：
-            config_data (dict): 配置数据
-
-        异常：
-            ValueError: 配置值无效时抛出
+        Plus 版: Redis 是可选,enabled=false 时只校验字段类型,
+        host/port/db/password 都可以为空(因为根本不会去连)
         """
         if "redis_config" in config_data:
             redis_config = config_data["redis_config"]
-            if isinstance(redis_config, dict):
-                # 验证Redis配置字段
-                required_fields = ["host", "port", "db", "password"]
-                for field in required_fields:
-                    if field not in redis_config:
-                        raise ValueError(f"Redis配置缺少必要字段: {field}")
-
-                # 更新Redis配置
-                self.plugin.config["redis"] = redis_config
-
-                # 重新初始化Redis连接
-                self.plugin._init_redis()
-            else:
+            if not isinstance(redis_config, dict):
                 raise ValueError("Redis配置必须是字典格式")
+
+            # Plus 版: enabled 是核心字段,默认 false
+            enabled = bool(redis_config.get("enabled", False))
+
+            current = self.plugin.config.get("redis", {}) or {}
+            # 仅当 enabled=true 时才要求 host/port
+            if enabled:
+                for f in ("host", "port"):
+                    if not redis_config.get(f):
+                        raise ValueError(f"启用 Redis 时必须填写 {f}")
+
+            # 合并字段
+            for k, v in redis_config.items():
+                current[k] = v
+            current["enabled"] = enabled
+            self.plugin.config["redis"] = current
+
+            # 重新初始化 Redis 连接(容错在 _init_redis 内)
+            self.plugin._init_redis()
+
+    # ------------------------------------------------------------------
+    # Plus 版: VIP / 群白名单配置写入
+    # ------------------------------------------------------------------
+
+    def _update_vip_config(self, config_data):
+        """
+        更新 VIP / 群白名单配置(可通过 Web 界面下发)
+
+        接受 config_data.vip 中的以下字段:
+            - data_file: str
+            - normal_daily_limit / monthly_daily_limit / quarterly_daily_limit: int
+            - unlimited_group_ids: list[str|int]
+        """
+        if "vip" not in config_data:
+            return
+        vip = config_data["vip"]
+        if not isinstance(vip, dict):
+            raise ValueError("vip 配置必须是字典格式")
+
+        current = self.plugin.config.get("vip", {}) or {}
+
+        # 普通字段
+        for key, caster in [
+            ("data_file", str),
+            ("normal_daily_limit", int),
+            ("monthly_daily_limit", int),
+            ("quarterly_daily_limit", int),
+        ]:
+            if key in vip:
+                try:
+                    current[key] = caster(vip[key])
+                except (TypeError, ValueError) as e:
+                    raise ValueError(f"vip.{key} 字段类型错误: {e}")
+
+        # 群白名单
+        if "unlimited_group_ids" in vip:
+            raw = vip["unlimited_group_ids"]
+            if not isinstance(raw, list):
+                raise ValueError("vip.unlimited_group_ids 必须是列表")
+            # 统一存为字符串(与 _is_unlimited_group 保持一致)
+            current["unlimited_group_ids"] = [str(x) for x in raw if str(x).strip()]
+
+        self.plugin.config["vip"] = current
+        if self.plugin:
+            self.plugin._log_info("Web 界面更新 vip 配置: unlimited_group_ids 数量={}",
+                                  len(current.get("unlimited_group_ids", [])))
+
+    def _update_afdian_config(self, config_data):
+        """更新爱发电配置(可通过 Web 界面下发)"""
+        if "afdian" not in config_data:
+            return
+        afdian = config_data["afdian"]
+        if not isinstance(afdian, dict):
+            raise ValueError("afdian 配置必须是字典格式")
+
+        current = self.plugin.config.get("afdian", {}) or {}
+
+        str_fields = [
+            "sponsor_url",
+            "monthly_price",
+            "quarterly_price",
+            "monthly_plan_id",
+            "quarterly_plan_id",
+            "webhook_path",
+            "webhook_token",
+            "user_id",
+            "user_token",
+            # Plus 版: 主动核验模式
+            "monthly_url",
+            "quarterly_url",
+        ]
+        for key in str_fields:
+            if key in afdian:
+                current[key] = "" if afdian[key] is None else str(afdian[key])
+
+        if "enabled" in afdian:
+            current["enabled"] = bool(afdian["enabled"])
+
+        if "verify_cache_seconds" in afdian:
+            try:
+                current["verify_cache_seconds"] = max(0, int(afdian["verify_cache_seconds"]))
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"afdian.verify_cache_seconds 字段类型错误: {e}")
+
+        self.plugin.config["afdian"] = current
+        if self.plugin:
+            self.plugin._log_info("Web 界面更新 afdian 配置: enabled={}",
+                                  current.get("enabled", True))
+
+    def _update_sponsor_text(self, config_data):
+        """
+        Plus 版: 更新 /sponsor 文案(7 个字段,全部可改)
+        字段全空也接受(回退到默认文案)
+        """
+        sponsor_text = config_data.get("sponsor_text", {})
+        if not isinstance(sponsor_text, dict):
+            return
+        current = self.plugin.config.get("sponsor_text", {}) or {}
+        # 7 个文案字段,任一字段缺失或空字符串都保留(让 _fmt 走默认)
+        for key in (
+            "title", "description", "free_tier", "monthly_tier",
+            "quarterly_tier", "group_tip", "footer",
+        ):
+            v = sponsor_text.get(key, None)
+            if isinstance(v, str):
+                current[key] = v
+        self.plugin.config["sponsor_text"] = current
+        if self.plugin:
+            self.plugin._log_info("Web 界面更新 sponsor_text 配置")
 
     def _finalize_config_update(self):
         """
@@ -967,6 +1174,10 @@ class WebServer:
             # 更新各项配置
             self._update_limits_config(config_data)
             self._update_redis_config(config_data)
+            # Plus 版: 同步处理 vip / afdian / sponsor_text
+            self._update_vip_config(config_data)
+            self._update_afdian_config(config_data)
+            self._update_sponsor_text(config_data)
 
             # 完成配置更新
             self._finalize_config_update()
@@ -1014,11 +1225,45 @@ class WebServer:
         # 更新自定义消息
         self._update_custom_messages(config_data)
 
+        # Plus 版: 可参数化的可调项(原本是写死)
+        limits_cfg = self.plugin.config.get("limits", {})
+        # bar_length (int, 1-50)
+        if "bar_length" in config_data:
+            try:
+                v = int(config_data["bar_length"])
+                v = max(1, min(50, v))
+                limits_cfg["bar_length"] = v
+            except (TypeError, ValueError):
+                raise ValueError("bar_length 必须是整数")
+        # low_remaining_thresholds (list[int])
+        if "low_remaining_thresholds" in config_data:
+            v = config_data["low_remaining_thresholds"]
+            if not isinstance(v, list) or not all(isinstance(x, int) for x in v):
+                raise ValueError("low_remaining_thresholds 必须是整数列表")
+            limits_cfg["low_remaining_thresholds"] = sorted(set(v))
+        # top_default_count / top_max_count
+        for k, upper in (("top_default_count", 100), ("top_max_count", 100)):
+            if k in config_data:
+                try:
+                    v = int(config_data[k])
+                    v = max(1, min(upper, v))
+                    limits_cfg[k] = v
+                except (TypeError, ValueError):
+                    raise ValueError(f"{k} 必须是整数")
+        # stats_distribution_thresholds (list[int], 至少 1 个)
+        if "stats_distribution_thresholds" in config_data:
+            v = config_data["stats_distribution_thresholds"]
+            if not isinstance(v, list) or not v or not all(isinstance(x, int) for x in v):
+                raise ValueError("stats_distribution_thresholds 必须是整数列表且至少 1 项")
+            limits_cfg["stats_distribution_thresholds"] = sorted(set(v))
+        self.plugin.config["limits"] = limits_cfg
+
     def _get_users_data(self):
         """
         获取用户使用数据
 
         从Redis中获取所有用户的使用统计信息，包括使用次数、限制和剩余次数。
+        Redis 不可用时回退到 JSON 存储。
 
         返回：
             list: 用户数据列表，每个元素为字典格式：
@@ -1031,8 +1276,10 @@ class WebServer:
                     'group_name': str   # 群组名称（如果有）
                 }
         """
-        if not self.plugin or not self.plugin.redis:
+        if not self.plugin:
             return []
+        if not self.plugin.redis:
+            return self._get_users_data_fallback()
 
         try:
             today = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -1050,7 +1297,27 @@ class WebServer:
                 self.plugin._log_error("获取用户数据失败: {}", str(e))
             else:
                 print(f"获取用户数据失败: {e}")
+            return self._get_users_data_fallback()
+
+    def _get_users_data_fallback(self):
+        """Redis 不可用时从 JSON 存储获取用户数据"""
+        store = getattr(self.plugin, "json_store", None)
+        if store is None:
             return []
+        users_data = []
+        for uid, info in store.all_users().items():
+            daily = int(info.get("daily_limit", 0) or 0)
+            remain = int(info.get("remaining", 0) or 0)
+            used = max(0, daily - remain)
+            users_data.append({
+                "user_id": str(uid),
+                "usage_count": used,
+                "limit": daily,
+                "remaining": remain,
+                "group_id": "",
+                "group_name": "",
+            })
+        return sorted(users_data, key=lambda x: x["usage_count"], reverse=True)
 
     def _get_user_keys(self, date_str):
         """
@@ -1451,6 +1718,7 @@ class WebServer:
         获取群组使用数据
 
         从Redis中获取所有群组的使用统计信息，包括群组模式、使用次数和限制。
+        Redis 不可用时返回空（JSON 存储模式不跟踪群组级别用量）。
 
         返回：
             list: 群组数据列表，每个元素为字典格式：
@@ -1462,7 +1730,9 @@ class WebServer:
                     'mode': str          # 群组模式（shared/individual）
                 }
         """
-        if not self.plugin or not self.plugin.redis:
+        if not self.plugin:
+            return []
+        if not self.plugin.redis:
             return []
 
         try:
@@ -1698,7 +1968,9 @@ class WebServer:
                 self._start_time = time.time()
                 from werkzeug.serving import make_server
 
-                self._server_instance = make_server(self.host, self.port, self.app)
+                self._server_instance = make_server(
+                    self.host, self.port, self.app, threaded=True
+                )
                 self._log(f"Web服务器启动成功: http://{self.host}:{self.port}")
                 self._server_instance.serve_forever()
             except Exception as e:
@@ -1895,7 +2167,19 @@ class WebServer:
         if self.plugin:
             self.plugin._log_error(error_msg)
         else:
-            print(error_msg)
+            print(f"{message}: {error}")
+
+
+# Plus 版: flask / flask-cors 软依赖兜底
+# 启动时 main.py 会 import WebServer;若 flask 不可用,这里把 WebServer 设为 None,
+# main.py 走"无 Web 面板"分支,不影响其它功能。
+# 注意:这个 if 只在模块加载时执行一次;pip install 后需要 /plugin reload 触发重新加载。
+if Flask is None:
+    try:
+        from flask import Flask as _F  # noqa: F401
+        from flask_cors import CORS as _C  # noqa: F401
+    except ImportError:
+        WebServer = None
 
 
 if __name__ == "__main__":

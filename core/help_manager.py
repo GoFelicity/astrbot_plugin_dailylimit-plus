@@ -191,8 +191,9 @@ class HelpManager:
 
     def build_version_info_help(self) -> str:
         """构建版本信息帮助信息"""
+        # Plus 版: 改回主项目 (GoFelicity 接手), 历史作者保留在 README 的致谢区
         return (
-            "\n📝 版本信息：v2.8.9 | 作者：left666 | 改进：Sakura520222\n"
+            f"\n📝 版本信息:{_META_VERSION} | 维护:{_META_AUTHOR}\n"
             "═════════════════════════"
         )
 

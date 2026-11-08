@@ -177,6 +177,9 @@ class MessageBuilder:
             group_context=group_context,
         )
 
+        # Plus 版: 豁免用户也展示 token 消耗
+        status_msg += self._build_token_line(user_id, with_month=True)
+
         # 添加时间段限制信息（即使豁免用户也显示）
         if time_period_limit is not None:
             current_period_info = self.get_current_time_period_info(current_time_str)
@@ -191,6 +194,55 @@ class MessageBuilder:
                 status_msg += time_period_msg
 
         return status_msg
+
+    def _format_tokens(self, n: int) -> str:
+        """千分位格式化 token 数 (1234 -> '1,234')"""
+        try:
+            return f"{int(n):,}"
+        except (TypeError, ValueError):
+            return "0"
+
+    def _build_token_line(self, user_id, with_month: bool = True) -> str:
+        """
+        Plus 版: 构建 token 展示行(单用户维度)
+        优先读 token_tracker,失败时静默返回空串(不影响主流程)
+        """
+        if not user_id:
+            return ""
+        # 开关: 管理员可关掉 token 展示
+        try:
+            show = self.plugin.config.get("limits", {}).get(
+                "show_token_usage", True
+            )
+        except Exception:
+            show = True
+        if not show:
+            return ""
+
+        tracker = getattr(self.plugin, "token_tracker", None)
+        if tracker is None:
+            return ""
+
+        try:
+            today = tracker.get_today(str(user_id))
+            if today.get("calls", 0) == 0:
+                return "\n🔥 今日 token: 0"
+            today_line = (
+                f"\n🔥 今日 token: {self._format_tokens(today['total'])} "
+                f"(输入 {self._format_tokens(today['input'])} + "
+                f"输出 {self._format_tokens(today['output'])}, "
+                f"{today['calls']} 次调用)"
+            )
+            if not with_month:
+                return today_line
+            month = tracker.get_month(str(user_id))
+            month_line = (
+                f"\n📈 本月累计: {self._format_tokens(month['total'])} "
+                f"({month['calls']} 次)"
+            )
+            return today_line + month_line
+        except Exception:
+            return ""
 
     def build_shared_group_status(self, user_id, group_id, limit, reset_time):
         """构建群组共享模式状态消息"""
@@ -218,6 +270,8 @@ class MessageBuilder:
             base_template += "\n📈 {progress_bar}"
         if show_remaining:
             base_template += "\n🎯 剩余次数：{remaining} 次"
+        # Plus 版: 群共享模式也展示本群总 token(汇总群内所有用户)
+        base_template += "{token_line}"
         base_template += "\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}"
 
         return self.get_custom_message(
@@ -228,6 +282,7 @@ class MessageBuilder:
             limit=limit,
             progress_bar=progress_bar,
             remaining=remaining,
+            token_line=self._build_token_line(user_id, with_month=False),
             usage_tip=usage_tip,
             reset_time=reset_time,
         )
@@ -258,6 +313,8 @@ class MessageBuilder:
             base_template += "\n📈 {progress_bar}"
         if show_remaining:
             base_template += "\n🎯 剩余次数：{remaining} 次"
+        # Plus 版: 个人 token 今日+本月
+        base_template += "{token_line}"
         base_template += "\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}"
 
         return self.get_custom_message(
@@ -268,6 +325,7 @@ class MessageBuilder:
             limit=limit,
             progress_bar=progress_bar,
             remaining=remaining,
+            token_line=self._build_token_line(user_id, with_month=True),
             usage_tip=usage_tip,
             reset_time=reset_time,
         )
@@ -295,6 +353,8 @@ class MessageBuilder:
             base_template += "\n📈 {progress_bar}"
         if show_remaining:
             base_template += "\n🎯 剩余次数：{remaining} 次"
+        # Plus 版: 私聊模式展示 token 今日+本月
+        base_template += "{token_line}"
         base_template += "\n\n💡 使用提示：{usage_tip}\n🔄 每日重置时间：{reset_time}"
 
         return self.get_custom_message(
@@ -304,6 +364,7 @@ class MessageBuilder:
             limit=limit,
             progress_bar=progress_bar,
             remaining=remaining,
+            token_line=self._build_token_line(user_id, with_month=True),
             usage_tip=usage_tip,
             reset_time=reset_time,
         )

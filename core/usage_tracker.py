@@ -5,6 +5,8 @@
 - 使用记录存储
 - 使用统计更新
 - 趋势数据分析
+
+Plus 版: 无 Redis 时静默降级(不记录),不影响主流程
 """
 
 import datetime
@@ -24,6 +26,15 @@ class UsageTracker:
         self.plugin = plugin
         self.logger = plugin.logger
         self.redis_client = plugin.redis_client
+
+    def _redis_or_none(self):
+        """Plus 版: 仅当 Redis 启用且连接成功时返回 client"""
+        client = getattr(self, "redis_client", None)
+        if client is None:
+            return None
+        if hasattr(client, "is_available") and not client.is_available():
+            return None
+        return getattr(client, "redis", None)
 
     def record_usage(self, user_id, group_id=None, usage_type="llm_request"):
         """

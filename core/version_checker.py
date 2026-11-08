@@ -214,7 +214,7 @@ class VersionChecker:
                 current_version=current_version,
                 new_version=version_info.get("version", "未知"),
                 update_content=version_info.get("content", "暂无更新说明"),
-                download_url="https://github.com/left666/astrbot_plugin_daily_limit",
+                download_url="https://github.com/GoFelicity/astrbot_plugin_dailylimit-plus.git",
             )
 
             # 发送给每个管理员
