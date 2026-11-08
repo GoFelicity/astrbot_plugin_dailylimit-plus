@@ -19,6 +19,11 @@ from typing import Any
 class JsonStore:
     """JSON 文件存储管理器"""
 
+    # 群组共享计数存放在同一个 JSON 的保留键下,避免再引一份存储
+    GROUPS_KEY = "__groups__"
+    # 通用日计数器(Redis 不可用时的持久化后端),键名与 Redis 计数键一致
+    COUNTERS_KEY = "__counters__"
+
     def __init__(self, plugin, file_path: str = "data/user_data.json"):
         """
         初始化 JSON 存储
@@ -153,8 +158,60 @@ class JsonStore:
         return user
 
     def all_users(self) -> dict[str, Any]:
-        """获取所有用户数据(浅拷贝)"""
-        return dict(self.load())
+        """获取所有用户数据(浅拷贝),不含内部保留键"""
+        reserved = {self.GROUPS_KEY, self.COUNTERS_KEY}
+        return {
+            uid: info for uid, info in self.load().items() if uid not in reserved
+        }
+
+    # ---------- 通用日计数器(Redis 的 JSON 回退后端) ----------
+
+    def get_counter(self, key: str) -> int:
+        """读取当日计数器(跨天自动归零)"""
+        record = (self.load().get(self.COUNTERS_KEY) or {}).get(str(key))
+        if not isinstance(record, dict) or record.get("date") != self._today_str():
+            return 0
+        try:
+            return max(0, int(record.get("count", 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    def incr_counter(self, key: str) -> int:
+        """当日计数器 +1 并返回新值"""
+        data = self.load()
+        counters = data.setdefault(self.COUNTERS_KEY, {})
+        today = self._today_str()
+        record = counters.get(str(key))
+        if not isinstance(record, dict) or record.get("date") != today:
+            record = {"date": today, "count": 0}
+            counters[str(key)] = record
+        try:
+            record["count"] = max(0, int(record.get("count", 0))) + 1
+        except (TypeError, ValueError):
+            record["count"] = 1
+        self.save()
+        return record["count"]
+
+    def clear_counters(self) -> None:
+        """清空所有日计数器(重置用)"""
+        data = self.load()
+        if data.get(self.COUNTERS_KEY):
+            data[self.COUNTERS_KEY] = {}
+            self.save()
+
+    # ---------- 群组共享计数(Redis 不可用时的持久化回退) ----------
+
+    def get_group_usage(self, group_id: str | int) -> int:
+        """获取群组当日共享使用次数"""
+        return self.get_counter(self._group_counter_key(group_id))
+
+    def increment_group_usage(self, group_id: str | int) -> int:
+        """增加群组当日共享使用次数,返回增加后的次数"""
+        return self.incr_counter(self._group_counter_key(group_id))
+
+    @staticmethod
+    def _group_counter_key(group_id: str | int) -> str:
+        return f"group:{group_id}"
 
     async def aget_user(self, user_id: str | int) -> dict[str, Any]:
         """异步获取用户数据(异步锁)"""

@@ -2,7 +2,7 @@ name: daily_limit_plus
 display_name: 每日调用限制Plus(订阅制版)
 desc: 订阅制 + 群白名单无限量的 LLM 调用额度管理(JSON 持久化,爱发电对接)
 short_desc: 订阅制 LLM 调用额度管理,支持月/季付费与群白名单
-version: v2.9.0
+version: v2.9.1
 author: Geekertao (Plus Fork)
 repo: https://github.com/GoFelicity/astrbot_plugin_dailylimit-plus.git
 

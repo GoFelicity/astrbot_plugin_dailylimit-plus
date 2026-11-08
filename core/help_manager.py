@@ -199,7 +199,7 @@ class HelpManager:
 
     def build_full_help(self) -> str:
         """构建完整的帮助信息"""
-        help_msg = "🚀 日调用限制插件 v2.8.9 - 管理员详细帮助\n"
+        help_msg = "🚀 日调用限制插件 v2.8.11 - 管理员详细帮助\n"
         help_msg += "═════════════════════════\n\n"
 
         # 组合所有帮助信息

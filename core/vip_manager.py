@@ -45,10 +45,18 @@ class VipManager:
             return default
 
     def _limits_config(self) -> dict[str, int]:
-        """读取各 VIP 等级额度配置(容错: 任何字段损坏/格式错都回退到默认值)"""
+        """读取各 VIP 等级额度配置(容错: 任何字段损坏/格式错都回退到默认值)
+
+        普通档额度统一取 limits.default_daily_limit(与后台"默认每日限制次数"同一个值),
+        不再单独维护 vip.normal_daily_limit,避免两处配置各说各话。
+        """
         vip_cfg = self.config.get("vip", {})
+        limits_cfg = self.config.get("limits", {})
+        normal_default = self._safe_int(limits_cfg.get("default_daily_limit"), 20)
+        # 兼容旧配置: 显式写了 vip.normal_daily_limit 的仍以它为准
+        normal = self._safe_int(vip_cfg.get("normal_daily_limit"), normal_default)
         return {
-            self.LEVEL_NORMAL: self._safe_int(vip_cfg.get("normal_daily_limit"), 25),
+            self.LEVEL_NORMAL: normal,
             self.LEVEL_MONTHLY: self._safe_int(vip_cfg.get("monthly_daily_limit"), 150),
             self.LEVEL_QUARTERLY: self._safe_int(vip_cfg.get("quarterly_daily_limit"), 200),
         }
@@ -129,27 +137,6 @@ class VipManager:
         """获取用户当前每日额度(返回 int)"""
         user = self.check_and_reset(user_id)
         return int(user.get("daily_limit", fallback or 25))
-
-    def get_user_remaining(self, user_id: str | int) -> int:
-        """获取用户当前剩余额度"""
-        user = self.check_and_reset(user_id)
-        return int(user.get("remaining", 0))
-
-    def consume(self, user_id: str | int) -> int:
-        """
-        消耗一次额度
-
-        Returns:
-            消费后的剩余次数(< 0 表示已用尽,>= 0 表示剩余)
-        """
-        user = self.check_and_reset(user_id)
-        remaining = int(user.get("remaining", 0))
-        if remaining <= 0:
-            return remaining
-        remaining -= 1
-        user["remaining"] = remaining
-        self.store.save()
-        return remaining
 
     # ---------- VIP 变更接口(供 Webhook 调用) ----------
 
