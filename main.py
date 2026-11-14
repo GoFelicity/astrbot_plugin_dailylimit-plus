@@ -1213,6 +1213,27 @@ class DailyLimitPlugin(star.Star):
         # VIP 等级额度 / 默认额度
         return self._default_daily_limit(user_id)
 
+    def _get_individual_limit(self, user_id) -> int | float:
+        """个人独立模式额度：不读取群组专属限额。
+
+        群组 individual 模式下，每个人只吃自己的用户限额/VIP 额度，
+        不能因为群里配了 group_limits 就把群限额当成个人上限。
+        """
+        user_id_str = str(user_id)
+        limits_cfg = self.config["limits"]
+
+        if user_id_str in limits_cfg.get("exempt_users", []):
+            return float("inf")
+        try:
+            time_period_limit = self.time_period_mgr.get_current_time_period_limit()
+            if time_period_limit is not None:
+                return time_period_limit
+        except Exception:
+            pass
+        if user_id_str in self.user_limits:
+            return self.user_limits[user_id_str]
+        return self._default_daily_limit(user_id)
+
     def _default_daily_limit(self, user_id) -> int:
         """按 VIP 等级取每日额度(JSON 主路径),无 VIP 模块时回退配置默认值"""
         if getattr(self, "vip_manager", None):
@@ -1571,17 +1592,18 @@ class DailyLimitPlugin(star.Star):
             tuple: (使用次数, 限制次数, 使用类型描述)
         """
         with self.config_loader.lock:
-            limit = self._get_user_limit(user_id, group_id)
-
             if group_id is not None:
                 group_mode = self._get_group_mode(group_id)
                 if group_mode == "shared":
+                    limit = self._get_user_limit(user_id, group_id)
                     usage = self._get_group_usage(group_id)
                     usage_type = "群组共享"
                 else:
+                    limit = self._get_individual_limit(user_id)
                     usage = self._get_user_usage(user_id, group_id)
                     usage_type = "个人独立"
             else:
+                limit = self._get_user_limit(user_id, None)
                 usage = self._get_user_usage(user_id, group_id)
                 usage_type = "个人"
 
@@ -2037,8 +2059,8 @@ class DailyLimitPlugin(star.Star):
                     event.set_result(MessageEventResult().message("您没有权限查询使用限制"))
                     return
 
-            # 检查使用状态
-            limit = self._get_user_limit(user_id, group_id)
+            # 检查使用状态（群聊按 shared/individual 取对应口径）
+            usage, limit, usage_type = self._get_usage_info(user_id, group_id)
             time_period_limit = self.time_period_mgr.get_current_time_period_limit()
             current_time_str = datetime.datetime.now().strftime("%H:%M")
 
@@ -2087,7 +2109,7 @@ class DailyLimitPlugin(star.Star):
                 )
 
             # 追加 VIP 信息
-            status_msg += "\n\n" + self._build_vip_info(user_id)
+            status_msg += "\n\n" + self._build_vip_info(user_id, group_id)
 
         event.set_result(MessageEventResult().message(status_msg))
 
@@ -2104,8 +2126,7 @@ class DailyLimitPlugin(star.Star):
         if not getattr(self, "vip_manager", None):
             return ""
         info = self.vip_manager.describe_user(user_id)
-        limit = self._get_user_limit(user_id, group_id)
-        usage = self._get_user_usage(user_id, group_id)
+        usage, limit, usage_type = self._get_usage_info(user_id, group_id)
         remaining_text = "无限" if limit == float("inf") else max(0, int(limit - usage))
         level = info["vip_level"]
         level_label = {
@@ -2161,9 +2182,19 @@ class DailyLimitPlugin(star.Star):
         expire_text = info["vip_expire"] or "—"
 
         # 构造进度条(进度条宽度可配)
-        # 额度/用量走统一计数口径,避免 JSON 剩余字段与实际计数不同步
-        limit = self._get_user_limit(user_id)
-        used = self._get_user_usage(user_id)
+        # 额度/用量走统一计数口径；群聊里必须按 shared/individual 取对应额度，
+        # 否则会出现「群里提示群额度、/my 却显示个人额度」的错位。
+        group_id = (
+            event.get_group_id()
+            if event.get_message_type() == MessageType.GROUP_MESSAGE
+            else None
+        )
+        used, limit, usage_type = self._get_usage_info(user_id, group_id)
+        today_label = (
+            "今日"
+            if group_id is None
+            else ("本群今日" if usage_type == "群组共享" else "您在本群今日")
+        )
         if limit == float("inf"):
             remaining = -1
         else:
@@ -2186,7 +2217,8 @@ class DailyLimitPlugin(star.Star):
             f"👑 等级: {level_label}\n"
             f"📅 到期: {expire_text}\n"
             f"🔄 重置日: {info['last_reset']}\n"
-            f"📊 今日: {used}/{limit if limit != float('inf') else '无限'} 次 ({pct_text})\n"
+            f"🏷️ 口径: {usage_type}\n"
+            f"📊 {today_label}: {used}/{limit if limit != float('inf') else '无限'} 次 ({pct_text})\n"
             f"📈 {bar}\n"
             f"🎯 剩余: {'无限' if remaining < 0 else remaining} 次\n"
         )
