@@ -182,8 +182,14 @@ class UserTerms:
             return True, None
 
         user_id = str(event.get_sender_id() or "")
-        group_id = event.get_group_id()
-        group_id = str(group_id) if group_id is not None else None
+        raw_group_id = event.get_group_id()
+        # 私聊事件在 AstrBot 里通常返回空字符串（不是 None），
+        # 直接 str() 会得到 group_id=""，被误判成群组作用域并显示“群组 ”。
+        group_id = (
+            str(raw_group_id).strip()
+            if raw_group_id not in (None, "", 0, "0")
+            else None
+        )
         if not user_id:
             return True, None
 
