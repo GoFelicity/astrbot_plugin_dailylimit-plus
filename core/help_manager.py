@@ -48,7 +48,8 @@ class HelpManager:
             "├── /limit unexempt <用户ID> - 将用户从豁免列表移除\n"
             "│   示例：/limit unexempt 123456 - 取消用户123456的豁免\n"
             "├── /limit list_user - 列出所有用户特定限制\n"
-            "└── /limit list_group - 列出所有群组特定限制\n"
+            "├── /limit list_group - 列出所有群组特定限制\n"
+            "└── /my - 查看个人/当前群组的额度状态\n"
         )
 
     def build_time_period_help(self) -> str:
@@ -193,13 +194,16 @@ class HelpManager:
         """构建版本信息帮助信息"""
         # Plus 版: 改回主项目 (GoFelicity 接手), 历史作者保留在 README 的致谢区
         return (
-            f"\n📝 版本信息:{_META_VERSION} | 维护:{_META_AUTHOR}\n"
+            f"\n📝 版本信息:{getattr(self.plugin, 'plugin_version', 'v?')} | 维护:Geekertao (Plus Fork)\n"
             "═════════════════════════"
         )
 
     def build_full_help(self) -> str:
         """构建完整的帮助信息"""
-        help_msg = "🚀 日调用限制插件 v2.8.11 - 管理员详细帮助\n"
+        help_msg = (
+            f"🚀 日调用限制插件 {getattr(self.plugin, 'plugin_version', 'v?')}"
+            " - 管理员详细帮助\n"
+        )
         help_msg += "═════════════════════════\n\n"
 
         # 组合所有帮助信息
@@ -207,7 +211,13 @@ class HelpManager:
         help_msg += self.build_time_period_help()
         help_msg += self.build_reset_time_help()
         help_msg += self.build_skip_patterns_help()
-        help_msg += self.build_query_stats_help()
+        if getattr(self.plugin, "redis", None):
+            help_msg += self.build_query_stats_help()
+        else:
+            help_msg += (
+                "\n📊 统计/历史/趋势/排行榜命令需要 Redis；"
+                "当前使用 JSON 存储，已隐藏这些命令。\n"
+            )
         help_msg += self.build_reset_commands_help()
         help_msg += self.build_security_commands_help()
         help_msg += self.build_version_check_help()

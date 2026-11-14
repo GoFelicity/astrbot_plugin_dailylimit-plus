@@ -239,6 +239,20 @@ class JsonStore:
             data[self.COUNTERS_KEY] = {}
             self.save()
 
+    def delete_counters(self, keys) -> int:
+        """删除指定计数器键，返回实际删除数量。"""
+        data = self.load()
+        counters = data.get(self.COUNTERS_KEY) or {}
+        removed = 0
+        for key in list(keys):
+            if key in counters:
+                counters.pop(key, None)
+                removed += 1
+        if removed:
+            data[self.COUNTERS_KEY] = counters
+            self.save()
+        return removed
+
     # ---------- 群组共享计数(Redis 不可用时的持久化回退) ----------
 
     def get_group_usage(self, group_id: str | int) -> int:

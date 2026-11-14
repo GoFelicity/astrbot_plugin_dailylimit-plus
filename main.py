@@ -3724,15 +3724,95 @@ class DailyLimitPlugin(star.Star):
             await event.send(MessageChain().message("❌ 获取排行榜失败，请稍后重试"))
 
     @filter.permission_type(PermissionType.ADMIN)
+    async def _reset_usage_json(
+        self, event: AstrMessageEvent, user_id: str = "", group_id: str = ""
+    ) -> None:
+        """Redis 未启用时，用 JSON 计数器完成重置。"""
+        if user_id in (None, ""):
+            event.set_result(
+                MessageEventResult().message(
+                    "🔄 重置使用次数命令用法：\n"
+                    "• /limit reset all - 重置所有使用记录（包括个人和群组）\n"
+                    "• /limit reset <用户ID> - 重置特定用户的使用次数\n"
+                    "• /limit reset group <群组ID> - 重置特定群组的使用次数"
+                )
+            )
+            return
+        if not self.json_store:
+            event.set_result(
+                MessageEventResult().message("❌ JSON 计数器不可用，无法重置")
+            )
+            return
+
+        counters = self.json_store.today_counters() if self.json_store else {}
+        today_key = self._get_today_key()
+        user_id_str = str(user_id)
+
+        if user_id_str.lower() == "all":
+            removed = self.json_store.delete_counters(list(counters))
+            event.set_result(
+                MessageEventResult().message(
+                    f"✅ 已重置所有使用记录，共清理 {removed} 条记录"
+                    if removed
+                    else "✅ 当前没有使用记录需要重置"
+                )
+            )
+            return
+
+        if user_id_str.lower() == "group":
+            group_id = str(group_id or "")
+            if not group_id.isdigit():
+                event.set_result(
+                    MessageEventResult().message("用法: /limit reset group <群组ID>")
+                )
+                return
+            group_key = self._get_group_key(group_id)
+            prefix = f"{today_key}:{group_id}:"
+            keys = [
+                key
+                for key in counters
+                if key == group_key or key.startswith(prefix)
+            ]
+            removed = self.json_store.delete_counters(keys)
+            event.set_result(
+                MessageEventResult().message(
+                    f"✅ 已重置群组 {group_id} 的使用次数，共清理 {removed} 条记录"
+                    if removed
+                    else f"❌ 未找到群组 {group_id} 的使用记录"
+                )
+            )
+            return
+
+        if not user_id_str.isdigit():
+            event.set_result(
+                MessageEventResult().message("❌ 用户ID格式错误，请输入数字ID")
+            )
+            return
+
+        group_key = self._get_group_key(user_id_str)
+        keys = [
+            key
+            for key in counters
+            if key.startswith(f"{today_key}:")
+            and key.endswith(f":{user_id_str}")
+            and key != group_key
+        ]
+        removed = self.json_store.delete_counters(keys)
+        event.set_result(
+            MessageEventResult().message(
+                f"✅ 已重置用户 {user_id_str} 的使用次数，共清理 {removed} 条记录"
+                if removed
+                else f"❌ 未找到用户 {user_id_str} 的使用记录"
+            )
+        )
+
     @limit_command_group.command("reset")
     async def limit_reset(
         self, event: AstrMessageEvent, user_id: str = "", group_id: str = ""
     ):
         """重置使用次数（仅管理员）"""
         if not self.redis:
-            event.set_result(
-                MessageEventResult().message("Redis未连接，无法重置使用次数")
-            )
+            await self._reset_usage_json(event, user_id, group_id)
             return
 
         try:
