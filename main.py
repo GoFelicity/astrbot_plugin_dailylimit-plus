@@ -3780,7 +3780,6 @@ class DailyLimitPlugin(star.Star):
             self._log_error("获取排行榜失败: {}", str(e))
             await event.send(MessageChain().message("❌ 获取排行榜失败，请稍后重试"))
 
-    @filter.permission_type(PermissionType.ADMIN)
     async def _reset_usage_json(
         self, event: AstrMessageEvent, user_id: str = "", group_id: str = ""
     ) -> None:
@@ -3863,6 +3862,7 @@ class DailyLimitPlugin(star.Star):
             )
         )
 
+    @filter.permission_type(PermissionType.ADMIN)
     @limit_command_group.command("reset")
     async def limit_reset(
         self, event: AstrMessageEvent, user_id: str = "", group_id: str = ""
