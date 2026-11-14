@@ -99,6 +99,52 @@ except Exception as e:
     _import_error = str(e)
 
 
+class UnknownLimitCommandFilter(filter.CustomFilter):
+    """兜住 /limit 的未知子命令，避免它们掉进 LLM 烧额度。"""
+
+    _KNOWN = {
+        "messages",
+        "skip_patterns",
+        "resettime",
+        "help",
+        "set",
+        "setgroup",
+        "setmode",
+        "getmode",
+        "exempt",
+        "unexempt",
+        "priority",
+        "unpriority",
+        "list_exempt",
+        "list_priority",
+        "list_user",
+        "list_group",
+        "stats",
+        "history",
+        "trends",
+        "trends_api",
+        "analytics",
+        "status",
+        "domain",
+        "top",
+        "reset",
+        "timeperiod",
+        "checkupdate",
+        "version",
+    }
+
+    def filter(self, event: AstrMessageEvent, cfg) -> bool:
+        text = (event.message_str or "").strip()
+        while text[:1] in {"/", "!", "！", "。"}:
+            text = text[1:].lstrip()
+        parts = text.split()
+        if not parts or parts[0].lower() != "limit":
+            return False
+        if len(parts) == 1:
+            return True
+        return parts[1].lower() not in self._KNOWN
+
+
 class DailyLimitPlugin(star.Star):
     """限制群组成员每日调用大模型的次数(Plus 版: 订阅制 + 群白名单)"""
 
@@ -2332,6 +2378,17 @@ class DailyLimitPlugin(star.Star):
         ]
         msg = "\n".join(msg_lines)
         event.set_result(MessageEventResult().message(msg))
+    @filter.custom_filter(UnknownLimitCommandFilter, False)
+    async def unknown_limit_command(self, event: AstrMessageEvent):
+        """未知 /limit 子命令兜底：直接提示，不进入 LLM。"""
+        event.set_result(
+            MessageEventResult().message(
+                "❌ 未知的 /limit 子命令，本次不会调用 AI。\n"
+                "发送 /limit help 查看可用命令。"
+            )
+        )
+        event.stop_event()
+
     @filter.command("限制帮助")
     async def limit_help_all(self, event: AstrMessageEvent):
         """显示本插件所有指令及其帮助信息"""
